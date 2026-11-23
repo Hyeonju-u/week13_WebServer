@@ -234,7 +234,10 @@ static bool is_header_end_at (const char * buffer, size_t i) {
     return i >= 3 && memcmp(buffer + i - 3, "\r\n\r\n", 4) == 0;
 }
 
-/* (P14) 반환: 실패하면 NULL */
+/* (P14) 반환: 실패하면 NULL
+ * length 0은 지금 흐름에선 오지 않지만(FOUND면 최소 \r\n\r\n) 방어 코드로
+ * 1바이트를 잡는다. malloc(0)이 NULL을 돌려주는 환경에서 할당 실패로
+ * 오해하지 않게 하려는 것 */
 static char * copy_bytes (const char * source, size_t length) {
     char * copy = malloc(length > 0 ? length : 1);
     if (copy == NULL) {
