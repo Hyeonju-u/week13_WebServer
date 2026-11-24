@@ -103,8 +103,13 @@ line_result next_header_line (const char * block, size_t length,
 body_result start_body (request_t * request, char * buffer,
                         size_t * buffer_length);
 
-/* (R3c, P26) 소켓이 body + body_received 자리에 (GET이면 버릴 곳에)
- * count바이트를 읽은 뒤 부른다 */
+/* (L20) 연결 버퍼에 남은 본문 앞부분을 메서드와 관계없이 버리고 당긴다.
+ * 이후 읽기는 discard_remaining만큼만 하고 add_body_bytes로 알린다 */
+body_result start_discard_body (request_t * request, char * buffer,
+                                size_t * buffer_length);
+
+/* (R3c, P26, L25) 소켓이 body + body_received 자리에 (버리는 중이면
+ * 버릴 곳에) 남은 양 이하의 count바이트를 읽은 뒤 부른다 */
 body_result add_body_bytes (request_t * request, size_t count);
 
 /* (P27) */

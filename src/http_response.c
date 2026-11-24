@@ -23,7 +23,7 @@ typedef struct {
     const char * reason;
 } status_reason_t;
 
-/* (R1g, S12) 5번에 적힌 코드와 사유 문구 */
+/* (R1g, S12, L34) 5번에 적힌 코드와 사유 문구 */
 static const status_reason_t status_reasons[] = {
     { 200, "OK" },
     { 301, "Moved Permanently" },
@@ -31,6 +31,7 @@ static const status_reason_t status_reasons[] = {
     { 403, "Forbidden" },
     { 404, "Not Found" },
     { 405, "Method Not Allowed" },
+    { 408, "Request Timeout" },
     { 411, "Length Required" },
     { 413, "Content Too Large" },
     { 414, "URI Too Long" },

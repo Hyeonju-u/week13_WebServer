@@ -1,5 +1,6 @@
 #include "http_request.h"
 
+#include <assert.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -180,14 +181,23 @@ body_result start_body (request_t * request, char * buffer,
     return start_collect(request, buffer, buffer_length);
 }
 
-/* (R3c, P10, P26) Content-Length를 넘는 count는 받은 것으로 치지 않는다 */
+/* (L20) 메서드와 관계없이 할당 없이 버린다 (라우팅 결과가 정적일 때) */
+body_result start_discard_body (request_t * request, char * buffer,
+                                size_t * buffer_length) {
+    return start_discard(request, buffer, buffer_length);
+}
+
+/* (R3c, P10, P26, L20, L25) 버리는 중인지는 discard_remaining으로 본다.
+ * count가 남은 양보다 크면 소켓 코드 버그라 assert로 멈춘다 */
 body_result add_body_bytes (request_t * request, size_t count) {
-    if (request->method == METHOD_GET) {
+    if (request->discard_remaining > 0) {
+        assert(count <= request->discard_remaining);
         request->discard_remaining -= pick_smaller(count,
                                                    request->discard_remaining);
         return decide_body_result(request->discard_remaining);
     }
     size_t remaining = request->content_length - request->body_received;
+    assert(count <= remaining);
     request->body_received += pick_smaller(count, remaining);
     return decide_body_result(request->content_length
                               - request->body_received);

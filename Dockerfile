@@ -2,12 +2,17 @@
 #   docker build -t webserver-dev .
 #   docker run --rm -v "${PWD}:/work" webserver-dev make test
 #   docker run --rm -v "${PWD}:/work" webserver-dev make asan
+#   docker run --rm -v "${PWD}:/work" webserver-dev make itest
+#   docker run --rm -v "${PWD}:/work" webserver-dev make itest-asan
 FROM ubuntu:24.04
 
+# (L4, L41) python3: 통합 테스트, curl: 완료 기준 확인과 README 시연
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         valgrind \
+        python3 \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
