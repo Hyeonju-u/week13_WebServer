@@ -11,4 +11,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
+
+# (S18, S31) root는 권한 000 파일도 열어서 O-4·D-6을 검증할 수 없다.
+# ubuntu:24.04에 이미 있는 uid 1000 사용자를 쓴다
+USER ubuntu
+
 CMD ["make", "test"]
