@@ -14,6 +14,7 @@
 | B | 세부 결정 |
 | P | 파서 세부 결정 (`docs/step1-parser.md`) |
 | S | 정적 응답 세부 결정 (`docs/step2-static.md`) |
+| L | 이벤트 루프 세부 결정 (`docs/step3-loop.md`) |
 
 ## 1. 요구사항 흐름
 
@@ -124,8 +125,11 @@
 | B10 | 루트 밖: 글자로 `.`·`..` 정리 후 realpath 경계 비교, 403 (S6) |
 | B11 | 파일 오류 매핑, 그 밖 500 (S7) |
 | B12 | 정적 POST는 405 + `Allow: GET` (S8) |
+| B14 | epoll은 level-triggered (L3) |
+| B15 | 손님 쪽 타임아웃: 헤더 전체 60초 / 본문 사이 60초 / 쓰기 사이 60초 / keep-alive idle 75초 (L5, L6) |
+| B16 | 최대 연결 수 = fd 소프트 한도 − 여유분, 넘으면 listen을 잠깐 뺌 (L8) |
 
-아직 안 정한 B (해당 단계에서 정함): B14~B28. B7~B12의 자세한 내용은 `docs/step2-static.md`의 S 결정. 필요하면 멈추고 질문할 것.
+아직 안 정한 B (해당 단계에서 정함): B17~B28. B7~B12의 자세한 내용은 `docs/step2-static.md`의 S 결정, B14~B16은 `docs/step3-loop.md`의 L 결정. 필요하면 멈추고 질문할 것.
 
 ## 6. 비목표
 
