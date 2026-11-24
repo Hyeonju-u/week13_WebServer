@@ -76,7 +76,7 @@ request_t (path = "/docs/a%20b.html?x=1", method, keep_alive)
 - `Server` 헤더는 넣지 않는다
 - 200이 아닌 응답(301 포함)은 본문이 코드별 고정 짧은 HTML (`text/html; charset=utf-8`). 301 본문에도 주소를 넣지 않는다 (S19)
 - 오류 본문은 헤더 바로 뒤, 같은 버퍼에 이어 쓴다 (S27)
-- 다루는 코드와 사유 문구: 200 OK, 301 Moved Permanently, 400 Bad Request, 403 Forbidden, 404 Not Found, 405 Method Not Allowed, 411 Length Required, 413 Content Too Large, 414 URI Too Long, 431 Request Header Fields Too Large, 500 Internal Server Error, 501 Not Implemented, 505 HTTP Version Not Supported
+- 다루는 코드와 사유 문구: 200 OK, 301 Moved Permanently, 400 Bad Request, 403 Forbidden, 404 Not Found, 405 Method Not Allowed, 408 Request Timeout (3단계 L34에서 추가), 411 Length Required, 413 Content Too Large, 414 URI Too Long, 431 Request Header Fields Too Large, 500 Internal Server Error, 501 Not Implemented, 505 HTTP Version Not Supported
 
 ## 6. 수명 규칙
 

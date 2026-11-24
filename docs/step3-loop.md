@@ -15,14 +15,41 @@
 ```
 accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_request_head
    BAD → 오류 응답 + close 예약 (B31)
-   OK  → POST면 405, 본문은 [본문 버리기] (L11) / GET 본문은 버림 (P10)
-       → open_static_file → 응답 헤더 → [응답 쓰기: 헤더 → 파일 조각]
+   OK  → open_static_file (POST면 405) → 응답 헤더 → [응답 쓰기: 헤더 → 파일 조각]
 응답 끝 → close 예약이면 [lingering] → close
+        → 본문이 남았으면 [본문 버리기] (L11, L21) → 아래 버퍼 확인
         → 아니면 우리 버퍼부터 확인 (L13) → 완성된 요청이 있으면 바로 처리
                                           → 없으면 [keep-alive 대기]
 ```
 
-상태 이름·전환표는 구현 쪽에서 제안하고 사람이 확인한다 (🔥 2번).
+### 진행 카드 상태 (L24, 2026-11-24 확인)
+
+| 상태 | 기다리는 것 | epoll 관심 | 타이머 |
+|---|---|---|---|
+| `READ_HEAD` | 요청 헤더 | `EPOLLIN` | 헤더 **전체** (L5) |
+| `SEND` | 응답 헤더 → 파일 조각 | `EPOLLOUT` (L13: `EPOLLIN` 뺌) | 쓰기 **사이** (L5) |
+| `DISCARD` | 응답 뒤 남은 본문 버리기 (L11, L21) | `EPOLLIN` | 조용 5초 / 전체 30초 (L11) |
+| `IDLE` | keep-alive 다음 요청 | `EPOLLIN` | idle (L5) |
+| `LINGER` | `shutdown(SHUT_WR)` 뒤 읽고 버리기 (L12) | `EPOLLIN` | 조용 5초 / 전체 30초 (L12) |
+
+| 지금 | 일 | 다음 |
+|---|---|---|
+| (accept) | 카드 만들기 | `READ_HEAD` |
+| `READ_HEAD` | 헤더 완성 + 파서 BAD | `SEND` (close 예약, B31) |
+| `READ_HEAD` | 헤더 완성 + OK | `SEND` (L10·L11로 close 여부를 정함. 손님 half-close는 보지 않음, L27) |
+| `READ_HEAD` | 헤더 타임아웃, 받은 바이트 있음 | `SEND` (408, close 예약, L6) |
+| `READ_HEAD` | 헤더 타임아웃, 받은 바이트 0 | 닫기 (말없이, L26) |
+| `SEND` | 끝 + close 예약 | `LINGER` |
+| `SEND` | 끝 + 본문 남음 | `DISCARD` |
+| `SEND` / `DISCARD` | 끝 + 우리 버퍼에 바이트 있음 (L13) | `READ_HEAD` (바로 처리) |
+| `SEND` / `DISCARD` | 끝 + 우리 버퍼 비어 있음 | `IDLE` |
+| `IDLE` | 첫 바이트 도착 | `READ_HEAD` (헤더 타이머 시작) |
+| `READ_HEAD`·`DISCARD`·`IDLE`·`LINGER` | read 0 (L14) | 닫기 |
+| `DISCARD`·`LINGER` | 조용 / 전체 상한 | 닫기 |
+| `SEND`·`IDLE` | 쓰기·idle 타임아웃 | 닫기 (말없이, L6) |
+| 어디서든 | RST·`EPIPE`·`EPOLLERR` | 닫기 (로그 `reset`) |
+
+함수 이름: `create_conn` / `destroy_conn`(L28), `handle_conn_event`, `read_request_head`, `start_response`, `send_response`, `finish_response`, `discard_request_body`, `read_lingering`.
 
 ## 3. 정한 결정 (L, 2026-11-24)
 
@@ -35,28 +62,52 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 | L5 | 손님 쪽 타임아웃 네 개 (B15), nginx 기본값: 헤더 수신 **전체** 60초 / 본문 읽기 **사이** 60초 / 쓰기 **사이** 60초 / keep-alive idle 75초 | 헤더를 "사이"로 재면 Slowloris가 영원히 버팀 | 공격자는 연결 하나를 최대 60초 잡을 수 있음 (L8과 같이 봄) | R3c, R3d, R4a |
 | L6 | 타임아웃 응답: 요청 수신 중(헤더·본문)이면 408 + `Connection: close` (L12로 닫음). keep-alive idle과 쓰기 막힘은 말없이 닫음 | RFC 9110 §15.5.9. idle 중 408은 손님이 막 보낸 다음 요청과 겹치면 그 요청의 답처럼 보임. nginx도 idle은 그냥 닫음 | — | R4a |
 | L7 | 한 연결의 요청 수 상한은 두지 않는다 | nginx `keepalive_requests`(1000)의 주된 이유는 연결 메모리 풀 해제인데, 우리는 연결당 버퍼가 고정이라 해당 없음 | 5단계에서 루프 쏠림이 보이면 다시 판단 | R3d |
-| L8 | 최대 동시 연결 수 = `getrlimit(RLIMIT_NOFILE)` 소프트 한도 − 여유분 (B16). 한도에 닿거나 accept가 `EMFILE`/`ENFILE`이면 listen 소켓을 epoll에서 빼고, 연결 하나가 닫히면 다시 넣는다 | 손님은 오류 대신 커널 대기열에서 기다림. level에서 `EMFILE` 무한 반복(CPU 100%)을 같은 방법으로 막음 | 여유분 값, 우리 연결이 0개인데 `EMFILE`일 때 다시 넣는 방법은 구현 질문. 4단계에서 손님당 fd 2개로 계산이 바뀜 | R3b |
+| L8 | 최대 동시 연결 수 = (`getrlimit(RLIMIT_NOFILE)` 소프트 한도 − 여유분) ÷ 2 (B16). 여유분 = 16 + 루프 수 × 2 (3단계는 루프 1개라 18). 한도에 닿거나 accept가 `EMFILE`/`ENFILE`이면 listen 소켓을 epoll에서 빼고, 연결 하나가 닫히면 다시 넣는다 (`EMFILE`/`ENFILE` 재시도는 L23) | 손님은 오류 대신 커널 대기열에서 기다림. level에서 `EMFILE` 무한 반복(CPU 100%)을 같은 방법으로 막음. ÷ 2: 3단계도 파일을 보내는 동안 손님당 fd 2개(소켓 + 파일)라, 꽉 찼을 때 `open`이 `EMFILE`로 정상 요청에 500을 내지 않게. 4단계(백엔드 fd)도 같은 계산. 여유분 16: 고정 fd 5개(0·1·2, listen, epoll) + 가끔 쓰는 것(`/etc/localtime`, ASan). 루프 × 2: 5단계에서 루프마다 epoll·eventfd | 받을 수 있는 연결이 절반. ulimit 64면 (64 − 18) ÷ 2 = 23개 | R3b |
 | L9 | 파일 조각 버퍼는 루프당 하나(8KB, S11). 카드에는 보낸 위치(offset)만 기록하고 매번 `pread(offset)`. 덜 보낸 부분은 다시 읽는다 | 루프는 한 번에 연결 하나만 처리하므로 버퍼를 연결이 붙잡지 않음 → 메모리가 연결 수와 무관. 키워도 버퍼 × 루프 수만 늚 | 다시 읽기 비용(보통 페이지 캐시). 7단계에서 1MB 파일로 8KB vs 64KB 측정 | R1f, R3c |
 | L10 | 정적 처리 오류 뒤 연결: 400·500은 `Connection: close`, 301·403·404·405는 요청의 keep_alive를 따름 | nginx는 400·413·414·495·496·497·500·501 뒤 keep-alive를 끔. 500은 자원 부족이 흔한 원인이라 닫으면 바로 풀림. 404·301은 정상 흐름이라 닫으면 재연결 비용만 | — | R3d, R1g |
-| L11 | 정적 POST 405 뒤 남은 본문은 Content-Length만큼 읽어서 버리고 유지 (P10의 버리기 재사용). 버리기는 조용하면 5초 / 전체 30초 상한, 넘으면 닫음. 요청에 `Expect` 헤더가 있으면 버리지 않고 `Connection: close` | 405는 정상 안내. nginx도 본문을 버리고 실패할 때만 keep-alive를 끔. 사이 타임아웃만으로는 1바이트씩 보내는 손님이 버팀. `Expect: 100-continue` 손님은 본문을 안 보낼 수 있어 다음 요청을 본문으로 먹을 위험 | 405에 keep-alive를 보냈어도 30초가 넘으면 닫음 (서버는 keep-alive를 언제든 닫을 수 있음) | R2a, R3d |
+| L11 | 본문이 붙은 정적 요청(L21: GET·POST, 응답 코드 무관)의 응답 뒤 남은 본문은 Content-Length만큼 읽어서 버리고 유지 (P10의 버리기 재사용). 버리기는 조용하면 5초 / 전체 30초 상한, 넘으면 닫음. 요청에 `Expect` 헤더가 있으면 버리지 않고 `Connection: close` | 405는 정상 안내. nginx도 본문을 버리고 실패할 때만 keep-alive를 끔. 사이 타임아웃만으로는 1바이트씩 보내는 손님이 버팀. `Expect: 100-continue` 손님은 본문을 안 보낼 수 있어 다음 요청을 본문으로 먹을 위험 | 405에 keep-alive를 보냈어도 30초가 넘으면 닫음 (서버는 keep-alive를 언제든 닫을 수 있음) | R2a, R3d |
 | L12 | lingering close: `Connection: close`로 응답한 뒤에는 바로 `close`하지 않고 `shutdown(SHUT_WR)` → 들어오는 것을 읽어서 버림 → 손님이 닫거나(read 0) 5초 조용하거나 30초가 지나면 `close`. 적용: B31, L6 408, L10, L11, L14. idle 타임아웃·쓰기 막힘·손님 RST에는 적용하지 않음 | 안 읽은 데이터가 있는 채로 `close`하면 RST가 나가서 손님 쪽 커널이 도착해 있던 오류 응답까지 버림 (RFC 9112 Tear-down: 서버는 보통 단계적으로 닫음). nginx lingering 5초 / 30초 | 상태 하나, 타이머 두 개. 오류 손님에게 자리를 최대 30초 내줌. MUST는 아니고 품질 선택 | R4a, R6a |
 | L13 | 응답을 보내는 동안은 읽지 않는다 (`EPOLLIN` 뺌). 응답이 끝나면 `epoll_wait`보다 먼저 **우리 버퍼에 완성된 요청이 있는지 확인**하고, 있으면 바로 처리 | 순서가 저절로 지켜지고, 응답을 안 읽어 가는 손님이 메모리를 더 쓰게 할 수 없음. epoll은 커널 버퍼만 보므로 이미 우리 버퍼로 옮긴 요청은 알림이 오지 않음 | 보내는 중의 끊김은 쓰기 실패·`EPOLLHUP`·`EPOLLERR`로 앎 | R3c, R3d |
-| L14 | `read`가 0일 때: keep-alive 대기·요청 수신 중·본문 버리기·lingering이면 닫음. 요청을 다 받은 뒤면 응답을 끝까지 보내고(`Connection: close`) 닫음 | half-close 손님(`nc` 등)도 정상 응답을 받음. 완전히 떠난 손님이면 쓰기 한두 번 뒤 `EPIPE`로 정리 | — | R6a |
+| L14 | `read`가 0일 때: keep-alive 대기·요청 수신 중·본문 버리기·lingering이면 닫음. 요청을 다 받은 뒤면 응답을 끝까지 보내고 닫음 (`Connection` 헤더는 요청대로, L27) | half-close 손님(`nc` 등)도 정상 응답을 받음. 완전히 떠난 손님이면 쓰기 한두 번 뒤 `EPIPE`로 정리 | — | R6a |
 | L15 | 로그: 접근 로그는 stdout, 응답이 끝나거나 연결이 정리될 때 한 줄 (`시간 IP:포트 "요청 라인" 상태 실제보낸바이트 걸린ms [close/reset/timeout]`). 응답 없는 정리도 찍되 idle 타임아웃은 뺌. 내부 오류(500 원인 errno, accept·epoll 실패)는 stderr. 둘 다 줄 단위 버퍼(`setvbuf`). 접근 로그만 `--no-access-log`로 끔 | 데모·디버깅·Q6~Q9 증거. 죽기 직전 줄이 사라지지 않게. 부하 측정에서 로그 비용을 뺄 수 있게 | 5단계: 루프 N개가 stdout(stdio 락)을 공유 → 측정 후 루프별 버퍼 검토 | Q2, Q6~Q9 |
 | L16 | 파일 전송은 약속한 `Content-Length`보다 더 보내지 않는다. 파일이 먼저 끝나면(줄어듦) 연결을 닫는다 | 2단계에서 넘김. 경계를 넘기면 다음 응답이 깨짐 | — | R1f, R6a |
 | L17 | 시작할 때 `SIGPIPE`를 `SIG_IGN` (6단계의 시그널 스레드 구조 전에 먼저) | 끊긴 손님에게 쓰면 프로세스가 죽음 | — | R6b |
 | L18 | 타임아웃 값(L5, L11·L12의 5초/30초)은 실행 인자로 바꿀 수 있게 한다. 기본값은 L5·L12 값. 통합 테스트는 짧은 값으로 돌리고, 진짜 값은 한 번 따로 확인. 나중에 D10 설정 파일로 옮김 | 타임아웃은 원래 설정 대상(B4와 같음). 진짜 값으로 기다리면 테스트 한 바퀴가 몇 분 → 자주 못 돌림 | 옵션 이름은 구현 질문 | R3c, Q2 |
 | L19 | 3단계 자원 검사는 서버 fd 개수(시작 때와 같음)와 "카드 만든 수 = 정리한 수", ASan 잘못된 접근 0까지. 메모리 누수(LSan)는 6단계 셧다운이 생긴 뒤 전체 시나리오로 | LSan은 정상 종료 때 보고하는데 3단계 서버는 끝나는 방법이 없음. 간단 종료를 미리 넣으면 6단계에서 다시 짬 | 카드 수를 테스트가 읽는 방법은 구현 질문 | R6a, Q5 |
-
+| L20 | 본문을 버릴지 모을지는 메서드가 아니라 라우팅 결과로 연결 관리 쪽이 고른다. 정적으로 라우팅된 요청의 본문은 1단계에 새 공개 함수 `start_discard_body`(기존 `start_discard` 재사용)로 malloc 없이 버린다. `add_body_bytes`는 `method` 대신 `discard_remaining > 0`으로 버리는 중인지 본다. 3단계는 모든 요청이 정적이므로 모든 본문을 버림 | 파서는 라우팅을 모른다. `parse_request_head`는 본문을 안 건드리므로 모았다 버리는 낭비 없음. method를 GET으로 바꿔 `start_body`를 부르는 꼼수는 로그·405 판단을 흐림 | 1단계 파일 변경. `start_discard_body` 단위 테스트는 표에 없음(제안만). `start_body` 안의 GET 버리기(P10)는 확정 테스트 B-5 때문에 그대로 둠 | R2a, R2b, P10 |
+| L21 | 본문이 붙은 정적 요청은 GET·POST 모두, 응답 코드와 관계없이 **응답을 먼저 보내고** 남은 본문은 그 뒤 본문 버리기 상태에서 버린다 (L11의 5초 / 30초). `Expect` 헤더가 있으면 메서드와 관계없이 버리지 않고 `Connection: close`. 그래서 3단계에는 본문 수신 상태와 본문 타임아웃이 없다 | 하나로 맞춤. 정적 응답은 본문을 쓰지 않으므로 기다릴 이유가 없음. `POST /../x`의 403(keep-alive, L10)처럼 405가 아닌 응답 뒤에도 본문이 남기 때문 | 본문 사이 타임아웃(L5)과 E-3, `--body-timeout-ms`는 4단계로 (프록시가 본문을 모을 때 처음 쓰임) | R2a, R3d, P10 |
+| L22 | listen backlog = `SOMAXCONN` (실제 길이는 커널 `net.core.somaxconn`). 시작할 때 소프트 한도와 실제 최대 연결 수(L8)를 stderr에 한 줄 찍는다 (L15 stderr의 예외). 소프트 한도를 스스로 올리지는 않음 | Q12(C10K): `wrk -c 10000`처럼 한꺼번에 접속하면 511은 넘쳐 SYN 재시도 지연(1초 이상)이 측정에 섞임. ulimit이 작은 환경을 바로 알기 위해 | — | R1a, R3b, Q12 |
+| L23 | accept가 `EMFILE`/`ENFILE`이면 우리 연결 수와 관계없이 listen을 빼고 **100ms 뒤** 다시 넣어 본다. 그 전에 연결이 닫혀 먼저 다시 넣으면 타이머는 취소 | 연결이 0개면 L8의 "닫히면 다시 넣기"가 영영 안 옴. 연결이 다 idle이면 최대 75초 동안 바깥에서 풀린 fd를 못 씀. 여분 fd(`/dev/null`) 기법은 손님을 끊어서 L8 "거절 대신 대기"와 어긋남 | 100ms는 새 상수 (명세 근거 없음, 결과 보고에 적음) | R3b |
+| L24 | 진행 카드 상태는 `READ_HEAD` / `SEND` / `DISCARD` / `IDLE` / `LINGER` 5개. 전환표는 2번 | L21로 본문 수신 상태가 빠짐. 상태마다 epoll 관심과 타이머가 하나씩 정해짐 | 4단계에서 본문 수신·프록시 상태 추가 | R3c |
+| L25 | `add_body_bytes`에 남은 양보다 큰 count가 들어오면 디버그 빌드에서 `assert`로 멈춘다 (지금은 조용히 자름) | count는 소켓 코드가 남은 만큼만 읽은 양이라, 넘으면 소켓 코드 버그. ASan 통합 테스트 중 바로 잡힘 | 1단계 파일 변경. 릴리스 빌드(`NDEBUG`)에서는 지금처럼 자름 | R3c, P26 |
+| L26 | 받은 바이트가 0인 연결은 헤더 타임아웃이 지나면 408 없이 말없이 닫는다. 1바이트라도 받았으면 408 (L6) | 브라우저가 미리 열어 둔 연결. idle 중 408을 피한 L6과 같은 이유 (막 보낸 요청과 겹침). nginx도 같음 | 접근 로그 줄도 없음 (D 질문) | R4a |
+| L27 | (2026-11-24 고침) 손님 half-close(FIN)로 `Connection` 헤더를 바꾸지 않는다. `EPOLLRDHUP`을 받지 않고, 헤더는 요청 헤더와 L10·L11로만 정한다. half-close 손님은 응답을 끝까지 받고, 응답 뒤 `IDLE`에서 read 0으로 닫힌다 (L14) | 헤더를 정하는 순간 아직 도착하지 않은 FIN은 알 수 없어서 "half-close면 close로 답함"을 보장할 수 없음 (G-4가 FIN 도착 순서에 따라 가끔 실패). 보장할 수 없는 건 하지 않는다. nginx도 같음: `Connection` 줄은 `r->keepalive`로만 정하고 `pending_eof`는 keep-alive 대기에서 닫을 때만 봄 (`ngx_http_core_module.c`, `ngx_http_request.c`) | half-close 손님도 헤더에는 `keep-alive`가 찍힘 (손님은 더 보내지 않으니 피해 없음. 서버는 keep-alive를 언제든 닫을 수 있음) | R6a |
+| L28 | 카드는 연결마다 `malloc`(`create_conn`). 정리는 `destroy_conn(conn_t ** slot)` 하나: 타이머에서 빼기 → 파일 닫기 → `destroy_request` → 응답 헤더 free → 소켓 close → 카드 free → `*slot = NULL` → 정리 수 +1. 두 번째 호출은 `NULL`이라 바로 return | L19 "만든 수 = 정리한 수"가 그대로 드러남. 정리가 한 곳이라 빠뜨림이 없음 | 연결마다 malloc 1번 | R6a, L19 |
+| L29 | 타이머는 종류별 이중 연결 리스트(헤더·쓰기·idle·조용). 같은 종류는 값이 같아 뒤에 붙이면 마감 순서가 맞고, 갱신은 빼서 맨 뒤로 → O(1). `DISCARD`·`LINGER`의 전체 상한은 카드에 마감 시각만 두고 read 때마다 확인. `epoll_wait` 대기 = 각 리스트 맨 앞 중 가장 이른 마감까지 ms 올림, 없으면 -1. 시계는 `CLOCK_MONOTONIC` | 힙(O(log n))보다 짧고 빠름. 카드는 한 번에 리스트 하나에만 있음 (손님이 계속 보내면 read가 계속 와서 전체 상한을 확인할 수 있음) | 종류가 늘면 리스트도 늚 | R3c, L5 |
+| L30 | 한 번 깨어났을 때 연결 하나에서: 읽기 1번(최대 8KB), 쓰기 1번(헤더 남은 것 또는 조각 1개). listen에서는 accept 1개 | L3 "공평하게 돌리기". 빠른 손님 하나가 큰 파일로 루프를 붙잡지 않음(H-2). 새 상수 없음 | 1MB 파일이면 깨어나는 횟수 128번. 7단계에서 측정 | R3c, Q3 |
+| L31 | 손님 소켓에 `TCP_NODELAY`를 켠다 | 응답 헤더(작은 쓰기) 뒤 조각을 쓰면 Nagle + 손님 지연 ACK로 응답마다 약 40ms 멈춤 (루프백 MSS 64KB라 8KB 조각도 작은 조각) | 작은 패킷이 조금 늘 수 있음. 7단계에서 측정 | R3c |
+| L32 | 응답 헤더는 루프당 하나인 `MAX_RESPONSE_HEAD_SIZE` 버퍼에 쓴 뒤 실제 길이만 `copy_`해서 카드에 붙이고, 다 보내면 free. 할당 실패면 말없이 닫고 stderr | 대부분 200B 안팎이라 연결당 8.5KB 고정보다 메모리가 연결 수에 덜 묶임 (L9와 같은 생각). 보내는 중에는 카드가 들고 있어야 부분 쓰기를 이어 감 | malloc 실패 경로 하나 | R1f, R3c |
+| L33 | 버리는 본문(`DISCARD`)과 lingering 읽기는 L9의 루프당 8KB 조각 버퍼로 받는다 | 루프는 한 번에 연결 하나만 처리해서 겹치지 않음. 새 버퍼 없음 | — | R3c, L11, L12 |
+| L34 | 2단계 `write_response_head`의 코드 목록에 `408 Request Timeout`(사유 문구 + 고정 오류 본문)을 추가한다 | L6의 408을 같은 함수로 만듦 (S25: 오류 응답은 한 함수). 3단계 쪽에서 따로 만들면 응답 코드가 두 곳 | 2단계 파일 변경 (`docs/step2-static.md` 5번 목록도 같이) | R4a, L6 |
+| L35 | 타임아웃 옵션은 ms 정수, `--이름=값` 형식 5개: `--header-timeout-ms`(60000), `--send-timeout-ms`(60000), `--keepalive-timeout-ms`(75000), `--linger-quiet-ms`(5000), `--linger-total-ms`(30000). linger 두 개는 본문 버리기(L11)와 lingering(L12)이 같이 씀. 모르는 옵션·숫자 아닌 값·포트 1~65535 밖이면 사용법을 stderr에 찍고 종료 코드 2, 루트 `copy_static_root` 실패는 1. 통합 테스트 값: 헤더·쓰기·idle 1000, 조용 300, 전체 1500 | 초 단위면 테스트 한 바퀴가 길어짐. 버리기와 lingering은 값도 하는 일(읽고 버리기)도 같음. 2와 1로 "명령을 잘못 침"과 "환경이 잘못됨"을 나눔 | 버리기·lingering을 다른 값으로 두려면 옵션을 나눠야 함. 본문 타임아웃 옵션은 4단계(L21) | L18, C4 |
+| L36 | `--count-log`를 켜면 카드를 정리할 때마다 stderr에 `cards created=N destroyed=M` 한 줄. 테스트는 마지막 줄을 읽음. fd 개수는 테스트가 `/proc/<pid>/fd`로 셈 | `SIGUSR1`은 6단계 시그널 구조(D9)와 겹침, `/__stats`는 "모든 요청은 정적" 범위를 깸 | L15 stderr의 예외 (L22와 같은 종류). 끄면 비용 없음 | L19, Q5 |
+| L37 | 접근 로그 세부: 시간은 nginx 형식 `[24/Nov/2026:13:05:01 +0000]` (UTC, 초 단위). 요청 라인은 파싱 성공이면 원문 첫 줄, 파서 BAD나 첫 줄을 못 받았으면 `"-"`. 응답 없는 정리는 상태 `-`. 걸린 ms = 요청 첫 바이트부터 로그 찍을 때까지 (`CLOCK_MONOTONIC`). 꼬리표: keep-alive로 계속이면 없음 / 서버가 닫기로 했으면 `close` / 손님 RST·`EPIPE`·`EPOLLERR`이면 `reset` / 408이나 쓰기 타임아웃이면 `timeout`. 받은 바이트 0인 연결(L26)은 찍지 않음 | nginx 로그 분석 도구를 그대로 씀. 손님이 보낸 엉터리 바이트(제어 문자·줄바꿈)가 로그를 깨거나 위조하지 않게. 미리 열어 둔 연결의 빈 줄을 줄임 (K-3과 같은 이유) | 파서 BAD 요청의 원문은 로그에 안 남음. 연결만 하는 스캔도 안 남음 | L15, Q6~Q9 |
+| L38 | listen 주소는 `0.0.0.0` (IPv4 전체). IPv6는 비목표 | Docker `-p`로 컨테이너 밖 브라우저·curl이 접속하려면 필요 (컨테이너 안 `127.0.0.1`은 자기 자신만) | 같은 네트워크의 다른 컴퓨터도 접속 가능 | R1a |
+| L39 | 파일: `src/main.c`(인자·SIGPIPE·listen), `include/event_loop.h`·`src/event_loop.c`(epoll·accept·등록 입구·fd 한도), `include/connection.h`·`src/connection.c`(카드·상태 기계), `include/timer_list.h`·`src/timer_list.c`, `include/access_log.h`·`src/access_log.c`, `tests/test_event_loop.py` | 하는 일 하나 = 파일 하나 (1·2단계와 같음). 5단계에서 루프 N개로 늘릴 때 main과 루프가 이미 나뉘어 있음 | 타이머 단위 테스트는 표에 없음 (제안만) | L1, L4 |
+| L40 | Makefile: `make server`(`build/server`), `make server-asan`(`build/server_asan`, `-fsanitize=address`만), `make itest`(통합 테스트), `make itest-asan`(ASan 서버로 같은 테스트, `ASAN_OPTIONS=detect_leaks=0`, stderr에 `AddressSanitizer`가 있으면 실패). `make test`·`make asan`은 그대로 단위 테스트만. 소켓 받기는 `accept` + `fcntl(O_NONBLOCK)` | 통합 테스트는 타임아웃을 기다려 몇십 초 → 단위 테스트를 자주 돌릴 수 있게 분리. leak은 L19대로 6단계. `accept4`는 `_GNU_SOURCE`가 필요해 S30의 `-D_XOPEN_SOURCE=700`과 섞임 | 통합 테스트는 따로 불러야 함 | B13, L19, Q5 |
+| L41 | Dockerfile에 `python3`과 `curl` 추가 | L4 통합 테스트, 완료 기준의 curl 확인과 README 시연을 컨테이너 안에서 리눅스 기준으로 | 이미지 약 30MB 늚 | L4, Q2 |
+| L42 | 통합 테스트 방법: Python이 빈 포트를 골라 넘기고 connect가 될 때까지 기다림. "안 읽어 감"·"천천히 받음"(E-5, G-3, J-1)은 손님 `SO_RCVBUF`를 작게 하고 8MB 파일. H-2의 느린 손님 10개 = E-1형 5개 + E-5형 5개. CPU(H-3, I-1)는 `/proc/<pid>/stat`의 CPU 시간을 재서 봄. I-1의 `ulimit -n 64`는 `setrlimit`으로 | localhost는 커널 버퍼가 몇 MB라 1MB 파일은 안 읽어도 쓰기가 막히지 않음 | — | L4, Q3 |
 ## 4. 구현 쪽(Claude Code)에 넘길 질문
 
-- 진행 카드의 상태 목록·전환표·함수 이름 (사람이 확인)
-- 타이머 자료구조 (종류별 값이 고정이라 "끝에 붙이는 연결 리스트"면 O(1)), `epoll_wait` 대기 시간 계산
-- 한 번 깨어났을 때 연결 하나에서 쓰기·읽기를 몇 번 할지 (공평함)
-- 응답 헤더 버퍼(`MAX_RESPONSE_HEAD_SIZE`)를 카드에 둘지, 보내는 동안만 잡을지
-- listen backlog 값, L8 여유분 값, 연결 0개 + `EMFILE`일 때 listen을 다시 넣는 방법
-- 타임아웃 옵션 이름(L18), 카드 수를 테스트가 읽는 방법(L19)
-- 파일 구성, Makefile 대상(서버 실행 파일, 통합 테스트), Dockerfile python3 추가
+- ~~진행 카드의 상태 목록·전환표·함수 이름~~ → L24 (2번 표), L28
+- ~~타이머 자료구조, `epoll_wait` 대기 시간 계산~~ → L29
+- ~~한 번 깨어났을 때 처리량~~ → L30
+- ~~응답 헤더 버퍼 위치~~ → L32
+- ~~listen backlog 값, L8 여유분 값, 연결 0개 + `EMFILE`~~ → L22, L8, L23
+- (같이 정함) 본문 버리기 함수 L20, 본문은 응답 뒤 L21, `add_body_bytes` 검사 L25, 0바이트 연결 L26, half-close는 헤더를 안 바꿈 L27, `TCP_NODELAY` L31, 버리기 버퍼 L33, 408 L34
+- ~~타임아웃 옵션 이름(L18), 카드 수를 테스트가 읽는 방법(L19)~~ → L35, L36
+- ~~파일 구성, Makefile 대상, Dockerfile python3 추가~~ → L39, L40, L41
+- (같이 정함) 접근 로그 세부 L37, listen 주소 L38, 테스트 방법 L42
 
 ## 5. 테스트 목록
 
@@ -102,7 +153,7 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 |---|---|---|---|
 | E-1 | 헤더 반만 보내고 멈춤 | 헤더 타임아웃에 408 + 닫힘 | L5, L6 |
 | E-2 | 헤더를 조금씩 계속 (Slowloris) | 늘어나지 않고 헤더 타임아웃에 408 | L5 |
-| E-3 | 본문 중간에 멈춤 | 마지막 읽기부터 본문 타임아웃에 408 | L5, L6 |
+| E-3 | (4단계로 넘김, L21) 본문 중간에 멈춤 | 마지막 읽기부터 본문 타임아웃에 408 | L5, L6, L21 |
 | E-4 | 응답 뒤 아무것도 안 함 | idle 타임아웃에 말없이 닫힘 (받은 바이트 0) | L6 |
 | E-5 | 큰 파일 요청 후 안 읽어 감 | 쓰기 막힌 지 쓰기 타임아웃에 닫힘 | L5, L6 |
 | E-6 | E-1 손님이 붙어 있는 동안 다른 손님 GET | 바로 200 | 완료 기준 |
@@ -120,7 +171,7 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 | G-1 | 연결하자마자 닫기 | 서버 정상 | R6a |
 | G-2 | 헤더 반만 보내고 닫기 | 서버 정상 | L14 |
 | G-3 | 큰 파일 요청, 10KB 읽고 RST로 끊기 | 서버 정상, 로그에 `reset` | R6a, L15 |
-| G-4 | 요청 보내고 `shutdown(SHUT_WR)` | 응답 전체 + `Connection: close` | L14 |
+| G-4 | 요청 보내고 `shutdown(SHUT_WR)` | 응답 전체 + 서버가 닫음 (`Connection` 헤더는 검사 안 함, L27) | L14, L27 |
 | G-5 | G-3을 100번 반복 | 서버가 살아 있음 | L17 |
 
 ### H. 동시성 (Q3, L3)
@@ -133,7 +184,7 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 ### I. 연결 한도 (L8)
 | # | 하는 일 | 기대 | 결정 |
 |---|---|---|---|
-| I-1 | `ulimit -n 64`로 실행 후 연결 100개 | 넘친 손님은 거절이 아니라 대기, CPU 100% 아님 | L8 |
+| I-1 | `ulimit -n 64`로 실행 후 연결 100개 | 최대 연결 23개 (L8, 시작 줄 L22), 넘친 손님은 거절이 아니라 대기, CPU 100% 아님 | L8, L23 |
 | I-2 | I-1에서 연결 몇 개를 닫음 | 기다리던 손님이 처리됨 | L8 |
 
 ### J. 파일이 줄어듦 (L16)
@@ -160,7 +211,7 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 
 ## 6. 다음 단계로 넘김
 
-- 4단계: `Expect: 100-continue` 처리 (지금은 `100 Continue`를 안 보내서 curl이 큰 POST에서 약 1초 기다림), 라우팅을 원문 경로로 볼지 푼 경로로 볼지, REST와 B5, `X-Forwarded-For`, hop-by-hop 헤더, 손님당 fd 2개에 맞춘 최대 연결 수
+- 4단계: `Expect: 100-continue` 처리 (지금은 `100 Continue`를 안 보내서 curl이 큰 POST에서 약 1초 기다림), 라우팅을 원문 경로로 볼지 푼 경로로 볼지, REST와 B5, `X-Forwarded-For`, hop-by-hop 헤더, 백엔드로 가는 GET + 본문을 전달할지와 `start_body` 안의 GET 버리기(P10)를 라우팅 쪽으로 옮길지 (L20), 본문 수신 상태와 본문 사이 타임아웃(L5)·`--body-timeout-ms`·테스트 E-3 (L21)
 - 6단계: 메모리 누수(LSan) 전체 시나리오 (L19)
 - 5단계: L1 accept를 D6 구조로, L7 쏠림 확인, L15 stdout 공유 락
 - 7단계: L9 8KB vs 64KB, (참고) level vs edge, 로그 켬/끔 처리량
