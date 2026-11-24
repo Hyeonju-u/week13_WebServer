@@ -175,4 +175,4 @@ I/O 멀티플렉싱 이벤트 루프 하나(macOS는 kqueue, Linux는 epoll)를 
 
 ## 한계
 
-TLS(HTTPS) 없음, chunked 요청 미지원(501), 코어 하나만 사용, 백엔드 연결 재사용 없음, Range·압축 없음 등. 자세한 목록은 README의 "알려진 한계"를 봅니다.
+TLS(HTTPS) 없음, chunked 요청 미지원(501), 코어 하나만 사용, 백엔드 연결 재사용 없음, Range·압축 없음 등.
