@@ -82,6 +82,7 @@ bool skip_leading_empty_lines (char * buffer, size_t * length) {
         count += 2;
     }
     if (count < *length && buffer[count] == '\n') {
+        // \r이 먼저 오는 건 덜 온 경우 일 수 있기 때문에 여기서는 \n만 잡음
         return false;
     }
     remove_buffer_prefix(buffer, length, count);
