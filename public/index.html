@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTTP 서버 실습실</title>
+  <link rel="stylesheet" href="/lab.css">
+  <script src="/lab.js" defer></script>
+</head>
+<body>
+  <header class="top"><div class="wrap bar">
+    <div class="brand"><span class="mark" aria-hidden="true">↔</span> HTTP 서버 실습실</div>
+    <code id="host"></code>
+  </div></header>
+  <main class="wrap">
+    <h1>요청 테스트</h1>
+    <p class="intro">항목을 선택하고 요청을 보내 서버의 실제 응답을 확인하세요.</p>
+    <div class="layout">
+      <nav aria-label="테스트 항목" id="cases"></nav>
+      <section class="panel" aria-labelledby="case-title">
+        <div class="request">
+          <h2 id="case-title"></h2>
+          <p id="description"></p>
+          <div class="route"><b id="method"></b><code id="path"></code></div>
+          <form>
+            <label id="message-field" hidden>보낼 메시지
+              <input id="message" value="안녕, 서버!" autocomplete="off">
+            </label>
+            <div class="actions">
+              <button id="run" type="submit">요청 보내기 <span aria-hidden="true">↗</span></button>
+              <span id="expected"></span>
+            </div>
+          </form>
+        </div>
+        <div class="response">
+          <h3>응답 결과</h3>
+          <p id="status" role="status"></p>
+          <div id="responses"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
