@@ -6,6 +6,7 @@ import resource
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -13,6 +14,40 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BINARY = os.environ.get("WEBSERVER_BINARY", os.path.join(ROOT, "build", "webserver"))
 BACKEND_B = os.path.join(ROOT, "tests", "backend_b.py")
 LOCALHOST = "127.0.0.1"
+IS_LINUX = sys.platform.startswith("linux")
+
+
+def count_fds_linux(pid):
+    try:
+        return len(os.listdir("/proc/%d/fd" % pid))
+    except OSError:
+        return 0
+
+
+def count_fds_macos(pid):
+    result = subprocess.run(["lsof", "-p", str(pid)], capture_output=True, text=True)
+    return max(len(result.stdout.splitlines()) - 1, 0)
+
+
+def read_rss_kb_linux(pid):
+    try:
+        with open("/proc/%d/status" % pid) as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+    except OSError:
+        pass
+    return 0
+
+
+def read_footprint_kb_macos(pid):
+    result = subprocess.run(["footprint", "-p", str(pid)], capture_output=True, text=True)
+    match = re.search(r"phys_footprint:\s+([\d.]+)\s+(KB|MB|GB)", result.stdout)
+    if match:
+        scale = {"KB": 1, "MB": 1024, "GB": 1024 * 1024}[match.group(2)]
+        return int(float(match.group(1)) * scale)
+    result = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True)
+    return int(result.stdout.strip() or 0)
 
 
 def find_free_port():
@@ -60,22 +95,23 @@ class Process:
         return total
 
     def fd_count(self):
-        result = subprocess.run(["lsof", "-p", str(self.pid)], capture_output=True, text=True)
-        return max(len(result.stdout.splitlines()) - 1, 0)
+        """Linux의 /proc 항목 수는 lsof보다 작다. lsof는 실행 파일·작업 폴더도 세기 때문이다."""
+        if IS_LINUX:
+            return count_fds_linux(self.pid)
+        return count_fds_macos(self.pid)
 
     def memory_kb(self):
-        """실제 점유 메모리. macOS는 free한 페이지를 RSS에 계속 세므로 footprint를 쓴다."""
-        result = subprocess.run(["footprint", "-p", str(self.pid)], capture_output=True, text=True)
-        match = re.search(r"phys_footprint:\s+([\d.]+)\s+(KB|MB|GB)", result.stdout)
-        if match:
-            scale = {"KB": 1, "MB": 1024, "GB": 1024 * 1024}[match.group(2)]
-            return int(float(match.group(1)) * scale)
-        result = subprocess.run(["ps", "-o", "rss=", "-p", str(self.pid)], capture_output=True, text=True)
-        return int(result.stdout.strip() or 0)
+        """실제 점유 메모리(KB). macOS는 free한 페이지를 RSS에 계속 세므로 footprint를 쓰고,
+        Linux는 해제한 페이지가 RSS에서 빠지므로 VmRSS를 쓴다."""
+        if IS_LINUX:
+            return read_rss_kb_linux(self.pid)
+        return read_footprint_kb_macos(self.pid)
 
     def count_leaks(self):
-        """macOS의 leaks 명령으로 누수 수를 센다. 쓸 수 없으면 None."""
-        if os.environ.get("WEBSERVER_INSERT_LIBRARY"):
+        """macOS의 leaks 명령으로 누수 수를 센다. 쓸 수 없으면 None.
+        Linux에는 살아 있는 프로세스를 검사하는 도구가 없어 None이다.
+        Linux 누수는 make asan-test가 종료 때 LeakSanitizer 보고로 확인한다."""
+        if IS_LINUX or os.environ.get("WEBSERVER_INSERT_LIBRARY"):
             return None
         result = subprocess.run(["leaks", str(self.pid)], capture_output=True, text=True)
         match = re.search(r"(\d+) leaks? for (\d+) total leaked bytes", result.stdout)

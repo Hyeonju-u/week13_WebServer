@@ -14,7 +14,7 @@ ASAN_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
 UBSAN_FLAGS = -fsanitize=undefined -fno-sanitize-recover=undefined -g -O1
 UNIT_TESTS = $(patsubst tests/%.c,build/%,$(wildcard tests/test_*.c))
 
-.PHONY: all asan ubsan limit-build test unit-test functional-test stress-test bench clean
+.PHONY: all asan asan-test ubsan limit-build test unit-test functional-test stress-test bench clean
 
 all: build/webserver
 
@@ -36,6 +36,26 @@ limit-build:
 asan:
 	mkdir -p build-asan
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) -o build-asan/webserver src/*.c
+
+# ASan 빌드로 기능 테스트를 돌린다. 기능 테스트는 로그의 [ERROR]만 보므로 UBSan의
+# "runtime error"처럼 멈추지 않는 보고를 놓친다. 그래서 sanitizer 보고를 파일로 받아
+# 하나라도 생기면 실패로 본다. 누수는 서버가 SIGINT로 끝날 때 LeakSanitizer가 보고한다.
+# ASan은 free한 메모리를 격리 구역(기본 256MB)에 쌓아 두어 RSS가 늘어서, 배압 시험의
+# "메모리 3MB 미만 증가"가 ASan 몫 때문에 실패한다(기본 +5.6MB, 0이면 +1.9MB).
+# 0이면 해제 후 사용 검출이 거의 사라지므로 방금 free한 1MB만 격리한다
+ASAN_REPORTS = build-asan/reports
+ASAN_QUARANTINE_MB = 1
+asan-test: asan limit-build
+	rm -rf $(ASAN_REPORTS)
+	mkdir -p $(ASAN_REPORTS)
+	ASAN_OPTIONS=log_path=$(CURDIR)/$(ASAN_REPORTS)/asan:detect_leaks=1:quarantine_size_mb=$(ASAN_QUARANTINE_MB) \
+	UBSAN_OPTIONS=log_path=$(CURDIR)/$(ASAN_REPORTS)/ubsan:print_stacktrace=1 \
+	WEBSERVER_BINARY=$(CURDIR)/build-asan/webserver \
+	python3 tests/functional_test.py
+	@if [ -n "$$(ls $(ASAN_REPORTS))" ]; then \
+	    echo "sanitizer 보고 있음:"; cat $(ASAN_REPORTS)/*; exit 1; \
+	fi
+	@echo "sanitizer 보고 0건 (누수 포함)"
 
 # ASan이 동작하지 않는 환경(이 개발 컴퓨터)에서 쓰는 대체 빌드
 ubsan:
