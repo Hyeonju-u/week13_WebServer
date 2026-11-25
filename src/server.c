@@ -350,12 +350,16 @@ static int open_root_directory (server_t * server, const char * root_path) {
  */
 static void raise_fd_limit (size_t max_connections) {
     struct rlimit limit;
+    //getrlimit:열수있는 파일(fd)개수를 limit 그릇에 담아줘 반환값 0 성공 -1 실패  
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
         return;
     }
+    /*연결 1개당 fd2개,(손님소켓+백엔드 소켓 또는 보내는 중인파일)
+    +64 = 리슨소켓,kqueue/epoll,루트 fd,비상용 fd,같은 고정 fd 여유분 */
     rlim_t wanted = (rlim_t) max_connections * 2 + 64;
+    //지금한도 (soft)가 목표보다 낮을때만 올림(이미 충분하면 건드리지않음)
     if (limit.rlim_cur < wanted) {
-        apply_fd_limit(&limit, wanted);
+        apply_fd_limit(&limit, wanted);//안에서 Hard 한도를 넘지 않게 조정후 setrlimit 할 것
     }
     getrlimit(RLIMIT_NOFILE, &limit);
     write_log(LOG_INFO, "fd 한도 %llu, 최대 연결 수 %zu",
@@ -693,11 +697,15 @@ static void dispatch_event (server_t * server, const event_t * event) {
 }
 
 static void accept_connections (server_t * server) {
+    //한라운드에 최대 64명(ACCEPT_BATCH_MAX) 까지만 받음
     for (int i = 0; i < ACCEPT_BATCH_MAX; i++) {
+        //지금 연결수가 상한 1만에 도달했으면 
         if (server->connection_count >= server->max_connections) {
-            pause_accepting(server);
+            // 리슨 소켓 알림끔->새 손님왔다고 더는 알림 안옴
+            pause_accepting(server);//받기 중단
             return;
         }
+        //상한 1만 도달 안했으면  (accept → 구조체 만들기 → 15초 마감 → 이벤트 등록) 실패가너가 대기줄 비었으면(EAGAIN) false->이번 라운드 끝
         if (!accept_one_connection(server)) {
             return;
         }
@@ -726,18 +734,22 @@ static int accept_one_connection (server_t * server) {
     register_client(server, fd, &address);
     return 1;
 }
-
+ 
 static int handle_accept_failure (server_t * server) {
+    //write_log 가 아래에서 같은 다른 함수 부르면 errno바뀔수 있음 
     int error_number = errno;
+    //줄에 기다리는 손님 없음(논블락킹 기다리지않고 바로 들어옴) 정상상황 라운드 끝
     if (error_number == EAGAIN || error_number == EWOULDBLOCK) {
         return 0;
     }
+    //fd가 바닥남 EMFILE= 우리 프로세스 한도 꽉참 /ENFILE 컴퓨터 전체 한도 꽉참 비상용 fd 트릭으로 맨 줄 앞 손님 받자마자 끊음
     if (error_number == EMFILE || error_number == ENFILE) {
-        discard_waiting_connection(server);
+        discard_waiting_connection(server);//비상용 fd 내용은 이 함수안에 있음
         return 0;
     }
     write_log(LOG_DEBUG, "accept 실패: %s", strerror(error_number));
-    return 1;
+    //그밖의 실패 (예 줄에서 기다리던 손님이 연결 끊고 먼저 가버림)->그손님 하나만 문제니까 기록하고
+    return 1;//다음 손님 계속 받아도 됨
 }
 
 /*
@@ -966,11 +978,11 @@ static void resume_accepting (server_t * server) {
         || server->connection_count >= server->max_connections) {
         return;
     }
-    if (add_event(server->loop, server->listen_fd, server, 1, 0) != 0) {
-        write_log(LOG_ERROR, "accept 재개 실패: %s", strerror(errno));
+    if (add_event(server->loop, server->listen_fd, server, 1, 0) != 0) {//0이 아니다 등록실패 이미 받는 중이면 아무것도 안 함
+        write_log(LOG_ERROR, "accept 재개 실패: %s", strerror(errno));//에러 로그 남기고 종료
         return;
     }
-    server->is_accepting = 1;
+    server->is_accepting = 1;//지금 손님 받는중 깃발세움
 }
 
 static void free_closed_connections (server_t * server) {
