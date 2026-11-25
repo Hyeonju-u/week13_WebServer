@@ -48,6 +48,7 @@ int parse_request_headers (char * headers, size_t length, request_t * request) {
     }
     *end = '\0';
     *request = (request_t){0};
+    /* 22번 첫 줄에서 GET과 /sample.html을 분리하고 HTTP 버전을 확인한다. */
     int status = parse_request_line(headers, request);
     fields_t fields = {0};
     char * line = end + 2;
@@ -57,12 +58,14 @@ int parse_request_headers (char * headers, size_t length, request_t * request) {
             return 400;
         }
         *end = '\0';
+        /* 23번 둘째 줄부터 한 줄씩 읽어 Host 등의 헤더 필드를 처리한다. */
         status = parse_field(line, &fields, request);
         line = end + 2;
     }
     if (status != 0) {
         return status;
     }
+    /* 마지막 줄까지 읽은 뒤에야 Host가 빠졌는지 알 수 있다. */
     if (!fields.has_host || (fields.has_encoding && fields.has_length)) {
         return 400;
     }
@@ -152,6 +155,7 @@ static int parse_field (char * line, fields_t * fields, request_t * request) {
     } else if (strcasecmp(line, "Content-Type") == 0) {
         request->content_type = value;
     } else if (strcasecmp(line, "Content-Length") == 0) {
+        /* 값 문자열을 body_length에 숫자로 저장해야 본문 수신을 끝낼 때를 안다. */
         return parse_length(value, fields, request);
     } else if (strcasecmp(line, "Transfer-Encoding") == 0) {
         fields->has_encoding = true;

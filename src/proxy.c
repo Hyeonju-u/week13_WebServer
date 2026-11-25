@@ -71,6 +71,7 @@ proxy_t * create_backend_connection (const proxy_route_t * route,
     if (proxy == NULL) {
         return NULL;
     }
+    /* 연결부터 응답 완료까지 같은 마감 시각을 사용한다. */
     proxy->deadline = monotonic_ms() + PROXY_TIMEOUT_MS;
     proxy->expected = SIZE_MAX;
     proxy->socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -125,6 +126,7 @@ static int send_backend_request (proxy_t * proxy, const request_t * request,
                                  const char * body) {
     int error;
     socklen_t size = sizeof(error);
+    /* 연결 실패 때도 소켓이 깨어날 수 있어 SO_ERROR로 성공 여부를 확인한다. */
     if (getsockopt(proxy->socket_fd, SOL_SOCKET, SO_ERROR, &error, &size) < 0
         || error != 0) {
         return 502;
@@ -192,6 +194,7 @@ static int read_backend_response (proxy_t * proxy, response_t * response) {
     if (length > BODY_LIMIT || length > proxy->expected) {
         return 502;
     }
+    /* 길이를 모르면 expected는 SIZE_MAX다. 이때는 recv()가 0이면 본문이 끝난다. */
     if (length != proxy->expected && count > 0) {
         return 0;
     }
