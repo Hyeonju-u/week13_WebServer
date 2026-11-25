@@ -14,7 +14,6 @@ typedef struct {
     size_t prefix_length;
     backend_t * backends;
     size_t backend_count;
-    size_t next_index;
 } route_t;
 
 typedef struct {
@@ -22,6 +21,7 @@ typedef struct {
     size_t route_count;
     int connect_timeout_seconds;
     int response_timeout_seconds;
+    int backend_fail_timeout_seconds;
 } proxy_config_t;
 
 proxy_config_t * create_empty_proxy_config (void);

@@ -22,6 +22,8 @@
 #define RESPONSE_HEADER_MAX 16384
 #define DEFAULT_CONNECT_TIMEOUT_SECONDS 3
 #define DEFAULT_RESPONSE_TIMEOUT_SECONDS 10
+/* 연결·응답 타임아웃이 난 백엔드를 Round-Robin 후보에서 빼 두는 시간 (#2 G13) */
+#define DEFAULT_BACKEND_FAIL_TIMEOUT_SECONDS 10
 
 /* 요청 하나가 차지할 수 있는 최대 크기: 요청 라인 + 헤더 + 본문 + 줄바꿈 여유 */
 #define INPUT_BUFFER_MAX \

@@ -72,6 +72,7 @@ typedef struct conn {
     route_t * route;
     size_t first_backend_index;
     size_t attempt_count;
+    int is_ignoring_marks;
     int has_timed_out;
 
     size_t forward_offset;

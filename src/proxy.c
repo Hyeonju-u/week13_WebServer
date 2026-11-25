@@ -12,12 +12,16 @@
 #define READ_CHUNK_BYTES 32768
 
 static void try_next_backend (server_t * server, conn_t * client);
+static int is_skipped_backend (const server_t * server, const conn_t * client,
+    size_t index);
 static int connect_to_backend (server_t * server, conn_t * client,
-    const backend_t * target);
+    size_t index);
 static int attach_backend (server_t * server, conn_t * client, int fd);
 static void finish_backend_connect (server_t * server, conn_t * backend);
 static void fail_backend_attempt (server_t * server, conn_t * backend,
     int has_timed_out);
+static void mark_current_backend_failed (server_t * server, conn_t * client);
+static size_t find_current_backend_index (const conn_t * client);
 static void detach_peers (conn_t * conn);
 static long long get_response_timeout_ms (const server_t * server);
 static void send_to_backend (server_t * server, conn_t * backend);
@@ -54,8 +58,9 @@ void start_proxy_request (server_t * server, conn_t * client,
         return;
     }
     client->route = route;
-    client->first_backend_index = route->next_index % route->backend_count;
-    route->next_index++;
+    client->first_backend_index = take_first_backend(server->upstream, route);
+    client->is_ignoring_marks =
+        !has_live_backend(server->upstream, route, server->now_ms);
     client->attempt_count = 0;
     client->has_timed_out = 0;
     client->state = STATE_PROXYING;
@@ -86,10 +91,12 @@ void handle_backend_timeout (server_t * server, conn_t * backend,
     deadline_kind_t kind) {
     if (kind == DEADLINE_BACKEND_CONNECT) {
         write_log(LOG_INFO, "백엔드 연결 시간 초과");
+        mark_current_backend_failed(server, backend->peer);
         fail_backend_attempt(server, backend, 1);
         return;
     }
     write_log(LOG_INFO, "백엔드 응답 시간 초과");
+    mark_current_backend_failed(server, backend->peer);
     fail_backend_response(server, backend, 504);
 }
 
@@ -113,13 +120,20 @@ void compute_backend_interest (const conn_t * backend, int * wants_read,
 
 /* ── 도우미 함수 ── */
 
+/*
+ * 빠진 백엔드는 건너뛴다. 요청을 시작할 때 모두 빠져 있었으면 표시를 무시하고
+ * 백엔드마다 한 번씩 시도한다 (#2 G13, G22).
+ */
 static void try_next_backend (server_t * server, conn_t * client) {
     const route_t * route = client->route;
     while (client->attempt_count < route->backend_count) {
         size_t index = (client->first_backend_index + client->attempt_count)
             % route->backend_count;
         client->attempt_count++;
-        if (connect_to_backend(server, client, &route->backends[index]) == 0) {
+        if (is_skipped_backend(server, client, index)) {
+            continue;
+        }
+        if (connect_to_backend(server, client, index) == 0) {
             return;
         }
         client->has_timed_out = 0;
@@ -128,17 +142,35 @@ static void try_next_backend (server_t * server, conn_t * client) {
     queue_error_response(server, client, status_code, NULL);
 }
 
-/* 0이면 연결을 시작했다(결과는 쓰기 알림으로 온다). -1이면 시작도 못 했다 */
+static int is_skipped_backend (const server_t * server, const conn_t * client,
+    size_t index) {
+    return !client->is_ignoring_marks
+        && !is_backend_live(server->upstream, client->route, index,
+            server->now_ms);
+}
+
+/*
+ * 0이면 연결을 시작했다(결과는 쓰기 알림으로 온다). -1이면 시작도 못 했다.
+ * 루프백은 connect가 바로 거절을 돌려줄 수 있어서 여기서도 백엔드를 뺀다.
+ * socket()·fcntl 실패는 이 서버의 자원 문제라 빼지 않는다.
+ */
 static int connect_to_backend (server_t * server, conn_t * client,
-    const backend_t * target) {
+    size_t index) {
+    const backend_t * target = &client->route->backends[index];
     int fd = socket(target->address.ss_family, SOCK_STREAM, 0);
     if (fd < 0) {
         return -1;
     }
-    if (set_nonblocking(fd) != 0
-        || (connect(fd, (const struct sockaddr *) &target->address,
-                target->address_length) != 0 && errno != EINPROGRESS)) {
+    if (set_nonblocking(fd) != 0) {
         close(fd);
+        return -1;
+    }
+    if (connect(fd, (const struct sockaddr *) &target->address,
+            target->address_length) != 0 && errno != EINPROGRESS) {
+        write_log(LOG_DEBUG, "백엔드 연결 실패: %s", strerror(errno));
+        close(fd);
+        mark_backend_failed(server->upstream, client->route, index,
+            server->now_ms);
         return -1;
     }
     return attach_backend(server, client, fd);
@@ -174,9 +206,12 @@ static void finish_backend_connect (server_t * server, conn_t * backend) {
     }
     if (error_number != 0) {
         write_log(LOG_DEBUG, "백엔드 연결 실패: %s", strerror(error_number));
+        mark_current_backend_failed(server, backend->peer);
         fail_backend_attempt(server, backend, 0);
         return;
     }
+    mark_backend_alive(server->upstream, backend->peer->route,
+        find_current_backend_index(backend->peer));
     backend->state = STATE_BACKEND_SENDING;
     set_connection_deadline(server, backend, DEADLINE_BACKEND_RESPONSE,
         get_response_timeout_ms(server));
@@ -194,6 +229,17 @@ static void fail_backend_attempt (server_t * server, conn_t * backend,
     detach_peers(backend);
     close_connection(server, backend);
     try_next_backend(server, client);
+}
+
+static void mark_current_backend_failed (server_t * server, conn_t * client) {
+    mark_backend_failed(server->upstream, client->route,
+        find_current_backend_index(client), server->now_ms);
+}
+
+/* try_next_backend가 attempt_count를 시도 직전에 올리므로 하나 앞이 지금 것이다 */
+static size_t find_current_backend_index (const conn_t * client) {
+    return (client->first_backend_index + client->attempt_count - 1)
+        % client->route->backend_count;
 }
 
 static void detach_peers (conn_t * conn) {

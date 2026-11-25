@@ -7,6 +7,7 @@
 #include "event.h"
 #include "proxy_config.h"
 #include "timer_heap.h"
+#include "upstream.h"
 
 typedef struct {
     int listen_fd;
@@ -16,6 +17,7 @@ typedef struct {
     event_loop_t * loop;
     timer_heap_t * heap;
     proxy_config_t * proxy_config;
+    upstream_t * upstream;
     size_t max_connections;
     size_t connection_count;
     conn_t * all_head;

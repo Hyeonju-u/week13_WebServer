@@ -36,6 +36,8 @@ proxy_config_t * create_empty_proxy_config (void) {
     }
     config->connect_timeout_seconds = DEFAULT_CONNECT_TIMEOUT_SECONDS;
     config->response_timeout_seconds = DEFAULT_RESPONSE_TIMEOUT_SECONDS;
+    config->backend_fail_timeout_seconds =
+        DEFAULT_BACKEND_FAIL_TIMEOUT_SECONDS;
     return config;
 }
 
@@ -166,6 +168,10 @@ static int parse_line (proxy_config_t * config, char * line,
     if (strcmp(command, "response_timeout") == 0) {
         return parse_timeout_line(&config->response_timeout_seconds, &cursor,
             line_number);
+    }
+    if (strcmp(command, "backend_fail_timeout") == 0) {
+        return parse_timeout_line(&config->backend_fail_timeout_seconds,
+            &cursor, line_number);
     }
     write_log(LOG_ERROR, "설정 %zu행: 알 수 없는 명령 %s", line_number,
         command);

@@ -14,7 +14,7 @@ ASAN_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
 UBSAN_FLAGS = -fsanitize=undefined -fno-sanitize-recover=undefined -g -O1
 UNIT_TESTS = $(patsubst tests/%.c,build/%,$(wildcard tests/test_*.c))
 
-.PHONY: all asan asan-test ubsan limit-build test unit-test functional-test stress-test bench clean
+.PHONY: all asan asan-test ubsan limit-build test unit-test functional-test backend-health-test stress-test bench clean
 
 all: build/webserver
 
@@ -51,7 +51,7 @@ asan-test: asan limit-build
 	ASAN_OPTIONS=log_path=$(CURDIR)/$(ASAN_REPORTS)/asan:detect_leaks=1:quarantine_size_mb=$(ASAN_QUARANTINE_MB) \
 	UBSAN_OPTIONS=log_path=$(CURDIR)/$(ASAN_REPORTS)/ubsan:print_stacktrace=1 \
 	WEBSERVER_BINARY=$(CURDIR)/build-asan/webserver \
-	python3 tests/functional_test.py
+	sh -c 'python3 tests/functional_test.py && python3 tests/backend_health_test.py'
 	@if [ -n "$$(ls $(ASAN_REPORTS))" ]; then \
 	    echo "sanitizer 보고 있음:"; cat $(ASAN_REPORTS)/*; exit 1; \
 	fi
@@ -70,11 +70,14 @@ unit-test: $(UNIT_TESTS)
 
 # 모든 테스트를 명령 하나로 다시 실행한다 (TST-07). 가혹 조건은 규모를 줄인 빠른 판이다.
 # 정식 규모는 make stress-test, 30분 장시간은 make long-test
-test: all unit-test functional-test
+test: all unit-test functional-test backend-health-test
 	python3 tests/stress_test.py --quick
 
 functional-test: all limit-build
 	python3 tests/functional_test.py
+
+backend-health-test: all
+	python3 tests/backend_health_test.py
 
 stress-test: all
 	python3 tests/stress_test.py

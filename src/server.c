@@ -104,7 +104,8 @@ server_t * create_server (const server_options_t * options) {
     server->proxy_config = options->proxy_config;
     server->max_connections = options->max_connections;
     server->now_ms = get_now_ms();
-    if (prepare_server(server, options) != 0) {
+    server->upstream = create_upstream(options->proxy_config);
+    if (server->upstream == NULL || prepare_server(server, options) != 0) {
         destroy_server(server);
         return NULL;
     }
@@ -162,6 +163,7 @@ void destroy_server (server_t * server) {
     if (server->heap != NULL) {
         destroy_timer_heap(server->heap);
     }
+    destroy_upstream(server->upstream);
     free(server);
 }
 
