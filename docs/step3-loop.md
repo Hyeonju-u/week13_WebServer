@@ -77,7 +77,7 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 | L20 | 본문을 버릴지 모을지는 메서드가 아니라 라우팅 결과로 연결 관리 쪽이 고른다. 정적으로 라우팅된 요청의 본문은 1단계에 새 공개 함수 `start_discard_body`(기존 `start_discard` 재사용)로 malloc 없이 버린다. `add_body_bytes`는 `method` 대신 `discard_remaining > 0`으로 버리는 중인지 본다. 3단계는 모든 요청이 정적이므로 모든 본문을 버림 | 파서는 라우팅을 모른다. `parse_request_head`는 본문을 안 건드리므로 모았다 버리는 낭비 없음. method를 GET으로 바꿔 `start_body`를 부르는 꼼수는 로그·405 판단을 흐림 | 1단계 파일 변경. `start_discard_body` 단위 테스트는 표에 없음(제안만). `start_body` 안의 GET 버리기(P10)는 확정 테스트 B-5 때문에 그대로 둠 | R2a, R2b, P10 |
 | L21 | 본문이 붙은 정적 요청은 GET·POST 모두, 응답 코드와 관계없이 **응답을 먼저 보내고** 남은 본문은 그 뒤 본문 버리기 상태에서 버린다 (L11의 5초 / 30초). `Expect` 헤더가 있으면 메서드와 관계없이 버리지 않고 `Connection: close`. 그래서 3단계에는 본문 수신 상태와 본문 타임아웃이 없다 | 하나로 맞춤. 정적 응답은 본문을 쓰지 않으므로 기다릴 이유가 없음. `POST /../x`의 403(keep-alive, L10)처럼 405가 아닌 응답 뒤에도 본문이 남기 때문 | 본문 사이 타임아웃(L5)과 E-3, `--body-timeout-ms`는 4단계로 (프록시가 본문을 모을 때 처음 쓰임) | R2a, R3d, P10 |
 | L22 | listen backlog = `SOMAXCONN` (실제 길이는 커널 `net.core.somaxconn`). 시작할 때 소프트 한도와 실제 최대 연결 수(L8)를 stderr에 한 줄 찍는다 (L15 stderr의 예외). 소프트 한도를 스스로 올리지는 않음 | Q12(C10K): `wrk -c 10000`처럼 한꺼번에 접속하면 511은 넘쳐 SYN 재시도 지연(1초 이상)이 측정에 섞임. ulimit이 작은 환경을 바로 알기 위해 | — | R1a, R3b, Q12 |
-| L23 | accept가 `EMFILE`/`ENFILE`이면 우리 연결 수와 관계없이 listen을 빼고 **100ms 뒤** 다시 넣어 본다. 그 전에 연결이 닫혀 먼저 다시 넣으면 타이머는 취소 | 연결이 0개면 L8의 "닫히면 다시 넣기"가 영영 안 옴. 연결이 다 idle이면 최대 75초 동안 바깥에서 풀린 fd를 못 씀. 여분 fd(`/dev/null`) 기법은 손님을 끊어서 L8 "거절 대신 대기"와 어긋남 | 100ms는 새 상수 (명세 근거 없음, 결과 보고에 적음) | R3b |
+| L23 | accept가 `EMFILE`/`ENFILE`이면 우리 연결 수와 관계없이 listen을 빼고 **100ms 뒤** 다시 넣어 본다. 그 전에 연결이 닫혀 먼저 다시 넣으면 타이머는 취소. 다시 넣기(`epoll_ctl ADD`)가 실패하면 어느 경로든 100ms 뒤 재시도 | 연결이 0개면 L8의 "닫히면 다시 넣기"가 영영 안 옴. 연결이 다 idle이면 최대 75초 동안 바깥에서 풀린 fd를 못 씀. 여분 fd(`/dev/null`) 기법은 손님을 끊어서 L8 "거절 대신 대기"와 어긋남 | 100ms는 새 상수 (명세 근거 없음, 결과 보고에 적음) | R3b |
 | L24 | 진행 카드 상태는 `READ_HEAD` / `SEND` / `DISCARD` / `IDLE` / `LINGER` 5개. 전환표는 2번 | L21로 본문 수신 상태가 빠짐. 상태마다 epoll 관심과 타이머가 하나씩 정해짐 | 4단계에서 본문 수신·프록시 상태 추가 | R3c |
 | L25 | `add_body_bytes`에 남은 양보다 큰 count가 들어오면 디버그 빌드에서 `assert`로 멈춘다 (지금은 조용히 자름) | count는 소켓 코드가 남은 만큼만 읽은 양이라, 넘으면 소켓 코드 버그. ASan 통합 테스트 중 바로 잡힘 | 1단계 파일 변경. 릴리스 빌드(`NDEBUG`)에서는 지금처럼 자름 | R3c, P26 |
 | L26 | 받은 바이트가 0인 연결은 헤더 타임아웃이 지나면 408 없이 말없이 닫는다. 1바이트라도 받았으면 408 (L6) | 브라우저가 미리 열어 둔 연결. idle 중 408을 피한 L6과 같은 이유 (막 보낸 요청과 겹침). nginx도 같음 | 접근 로그 줄도 없음 (D 질문) | R4a |
@@ -97,6 +97,7 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 | L40 | Makefile: `make server`(`build/server`), `make server-asan`(`build/server_asan`, `-fsanitize=address`만), `make itest`(통합 테스트), `make itest-asan`(ASan 서버로 같은 테스트, `ASAN_OPTIONS=detect_leaks=0`, stderr에 `AddressSanitizer`가 있으면 실패). `make test`·`make asan`은 그대로 단위 테스트만. 소켓 받기는 `accept` + `fcntl(O_NONBLOCK)` | 통합 테스트는 타임아웃을 기다려 몇십 초 → 단위 테스트를 자주 돌릴 수 있게 분리. leak은 L19대로 6단계. `accept4`는 `_GNU_SOURCE`가 필요해 S30의 `-D_XOPEN_SOURCE=700`과 섞임 | 통합 테스트는 따로 불러야 함 | B13, L19, Q5 |
 | L41 | Dockerfile에 `python3`과 `curl` 추가 | L4 통합 테스트, 완료 기준의 curl 확인과 README 시연을 컨테이너 안에서 리눅스 기준으로 | 이미지 약 30MB 늚 | L4, Q2 |
 | L42 | 통합 테스트 방법: Python이 빈 포트를 골라 넘기고 connect가 될 때까지 기다림. "안 읽어 감"·"천천히 받음"(E-5, G-3, J-1)은 손님 `SO_RCVBUF`를 작게 하고 8MB 파일. H-2의 느린 손님 10개 = E-1형 5개 + E-5형 5개. CPU(H-3, I-1)는 `/proc/<pid>/stat`의 CPU 시간을 재서 봄. I-1의 `ulimit -n 64`는 `setrlimit`으로 | localhost는 커널 버퍼가 몇 MB라 1MB 파일은 안 읽어도 쓰기가 막히지 않음 | — | L4, Q3 |
+| L43 | `epoll_wait` 한 번에 받는 이벤트 수 `MAX_EVENTS_PER_WAIT` = 512. 연결 수 상한이 아니고, 더 많이 준비돼 있으면 다음 `epoll_wait`에서 받음 (level-triggered라 빠지지 않음, L3) | 정확성에는 영향이 없고 시스템 호출 수(성능)에만 영향. nginx 기본값(`epoll_events 512`), Q12(C10K)에서 많이 몰려도 한 번에 받아 옴. 스택 약 6KB | 측정 근거는 아직 없음. 7단계 `wrk`로 64 vs 512 비교해서 확인 | R3c, Q4 |
 ## 4. 구현 쪽(Claude Code)에 넘길 질문
 
 - ~~진행 카드의 상태 목록·전환표·함수 이름~~ → L24 (2번 표), L28
@@ -214,4 +215,4 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 - 4단계: `Expect: 100-continue` 처리 (지금은 `100 Continue`를 안 보내서 curl이 큰 POST에서 약 1초 기다림), 라우팅을 원문 경로로 볼지 푼 경로로 볼지, REST와 B5, `X-Forwarded-For`, hop-by-hop 헤더, 백엔드로 가는 GET + 본문을 전달할지와 `start_body` 안의 GET 버리기(P10)를 라우팅 쪽으로 옮길지 (L20), 본문 수신 상태와 본문 사이 타임아웃(L5)·`--body-timeout-ms`·테스트 E-3 (L21)
 - 6단계: 메모리 누수(LSan) 전체 시나리오 (L19)
 - 5단계: L1 accept를 D6 구조로, L7 쏠림 확인, L15 stdout 공유 락
-- 7단계: L9 8KB vs 64KB, (참고) level vs edge, 로그 켬/끔 처리량
+- 7단계: L9 8KB vs 64KB, L43 이벤트 수 64 vs 512, (참고) level vs edge, 로그 켬/끔 처리량

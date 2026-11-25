@@ -24,8 +24,8 @@
 #define FD_PER_CONNECTION 2
 /* (L23) */
 #define LISTEN_RETRY_MS 100
-/* epoll_wait 한 번에 받는 이벤트 수 (새 상수, 결과 보고 참고) */
-#define MAX_EVENTS_PER_WAIT 64
+/* (L43) epoll_wait 한 번에 받는 이벤트 수. nginx 기본값, 7단계에서 측정 */
+#define MAX_EVENTS_PER_WAIT 512
 
 static bool find_max_connections (size_t * max_connections,
                                   unsigned long long * soft_limit);
@@ -127,7 +127,8 @@ void register_connection (loop_t * loop, int fd,
     }
 }
 
-/* (L8, L23) 자리가 나서 먼저 다시 넣으면 재시도 타이머는 취소한다 */
+/* (L8, L23) 자리가 나서 먼저 다시 넣으면 재시도 타이머는 취소한다.
+ * 다시 넣기가 실패하면 마지막 연결이었을 때 영영 못 받으므로 재시도 */
 void release_connection_slot (loop_t * loop) {
     loop->connection_count--;
     if (loop->is_listening
@@ -135,7 +136,9 @@ void release_connection_slot (loop_t * loop) {
         return;
     }
     stop_timer(&loop->retry_timer);
-    add_listen(loop);
+    if (!add_listen(loop)) {
+        start_timer(&loop->retry_timers, &loop->retry_timer, read_clock_ms());
+    }
 }
 
 /* ── 도우미 함수 ── */
