@@ -1,6 +1,8 @@
 # (B13) make test: 일반 빌드 / make asan: ASan·LSan 빌드 (Q5)
-# (S30) 1단계·2단계 실행 파일을 차례로 돌리고, 실패하면 멈춘다
-# (L40) make server / server-asan: 3단계 서버, make itest / itest-asan: 통합 테스트
+# (S30) 단위 테스트 실행 파일을 차례로 돌리고, 실패하면 멈춘다
+# (L40) make server / server-asan: 서버, make itest / itest-asan: 통합 테스트
+# (G42) 4단계: CF·RT 단위 테스트 추가, 통합 테스트는 test_proxy.py가
+#       CL-6으로 3단계 테스트까지 돌린다
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g -D_XOPEN_SOURCE=700 -Iinclude
 ASAN_FLAGS = -fsanitize=address,leak -fno-omit-frame-pointer
@@ -9,23 +11,39 @@ SERVER_ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
 REQUEST_SOURCES = src/http_request.c
 STATIC_SOURCES = src/http_request.c src/http_response.c src/static_file.c
-SERVER_SOURCES = $(STATIC_SOURCES) src/timer_list.c src/access_log.c \
-                 src/connection.c src/event_loop.c src/main.c
+CONFIG_SOURCES = $(STATIC_SOURCES) src/server_config.c
+ROUTER_SOURCES = $(CONFIG_SOURCES) src/router.c
+SERVER_SOURCES = $(ROUTER_SOURCES) src/timer_list.c src/access_log.c \
+                 src/upstream.c src/proxy_request.c src/proxy_response.c \
+                 src/connection.c src/backend_conn.c src/event_loop.c \
+                 src/main.c
 HEADERS = include/http_request.h include/http_response.h \
-          include/static_file.h tests/check.h
+          include/static_file.h include/server_config.h include/router.h \
+          tests/check.h
 SERVER_HEADERS = include/http_request.h include/http_response.h \
-                 include/static_file.h include/timer_list.h \
-                 include/access_log.h include/connection.h \
+                 include/static_file.h include/server_config.h \
+                 include/router.h include/timer_list.h \
+                 include/access_log.h include/upstream.h \
+                 include/proxy_request.h include/proxy_response.h \
+                 include/connection.h include/backend_conn.h \
                  include/event_loop.h
-INTEGRATION_TEST = tests/test_event_loop.py
+INTEGRATION_TEST = tests/test_proxy.py
 
-test: build/test_http_request build/test_static_file
+UNIT_TESTS = build/test_http_request build/test_static_file \
+             build/test_server_config build/test_router
+UNIT_TESTS_ASAN = $(addsuffix _asan,$(UNIT_TESTS))
+
+test: $(UNIT_TESTS)
 	./build/test_http_request
 	./build/test_static_file
+	./build/test_server_config
+	./build/test_router
 
-asan: build/test_http_request_asan build/test_static_file_asan
+asan: $(UNIT_TESTS_ASAN)
 	./build/test_http_request_asan
 	./build/test_static_file_asan
+	./build/test_server_config_asan
+	./build/test_router_asan
 
 server: build/server
 
@@ -57,6 +75,28 @@ build/test_static_file_asan: $(STATIC_SOURCES) tests/test_static_file.c \
 	mkdir -p build
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) -o $@ $(STATIC_SOURCES) \
 		tests/test_static_file.c
+
+build/test_server_config: $(CONFIG_SOURCES) tests/test_server_config.c \
+                          $(HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) -o $@ $(CONFIG_SOURCES) tests/test_server_config.c
+
+build/test_server_config_asan: $(CONFIG_SOURCES) tests/test_server_config.c \
+                               $(HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) -o $@ $(CONFIG_SOURCES) \
+		tests/test_server_config.c
+
+# check.h의 CHECK_VIEW를 RT가 쓰지 않아 생기는 경고만 끈다 (tests/ 고치지 않음)
+build/test_router: $(ROUTER_SOURCES) tests/test_router.c $(HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) -Wno-unused-function -o $@ $(ROUTER_SOURCES) \
+		tests/test_router.c
+
+build/test_router_asan: $(ROUTER_SOURCES) tests/test_router.c $(HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) -Wno-unused-function $(ASAN_FLAGS) -o $@ \
+		$(ROUTER_SOURCES) tests/test_router.c
 
 build/server: $(SERVER_SOURCES) $(SERVER_HEADERS)
 	mkdir -p build

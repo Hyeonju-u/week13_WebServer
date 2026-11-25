@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* (B4, P28) 경계값까지 허용한다. 설정 연동은 X-2 */
+/* (B4, P28) 경계값까지 허용한다. 본문 상한은 설정 max_body로 바꿈 (G23) */
 #define MAX_HEADER_SIZE 8192
 #define MAX_BODY_SIZE 1048576
 
@@ -93,6 +93,11 @@ bool copy_request_head (request_t * request, const char * buffer,
 parse_result parse_request_head (const char * head, size_t head_length,
                                  request_t * request);
 
+/* (G9, G23) parse_request_head와 같고, 본문 상한(413)만 max_body로 본다 */
+parse_result parse_request_head_limited (const char * head,
+                                         size_t head_length, size_t max_body,
+                                         request_t * request);
+
 /* (P5, P13, P15) block: 헤더 줄 영역 (P22).
  * LINE_OK면 *position을 다음 줄 시작으로 옮긴다 */
 line_result next_header_line (const char * block, size_t length,
@@ -106,6 +111,10 @@ body_result start_body (request_t * request, char * buffer,
 /* (L20) 연결 버퍼에 남은 본문 앞부분을 메서드와 관계없이 버리고 당긴다.
  * 이후 읽기는 discard_remaining만큼만 하고 add_body_bytes로 알린다 */
 body_result start_discard_body (request_t * request, char * buffer,
+                                size_t * buffer_length);
+
+/* (G33) start_body와 같지만 메서드와 관계없이 모은다 (프록시 경로) */
+body_result start_collect_body (request_t * request, char * buffer,
                                 size_t * buffer_length);
 
 /* (R3c, P26, L25) 소켓이 body + body_received 자리에 (버리는 중이면

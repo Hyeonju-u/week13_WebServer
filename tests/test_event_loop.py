@@ -4,6 +4,7 @@
 
 서버를 직접 띄우고 끈다. 정적 루트와 파일은 실행 중 /tmp 아래에 만들고
 끝나면 지운다 (S18). 타임아웃은 L35의 짧은 값으로 돌린다.
+서버는 설정 파일 하나로 띄운다 (G15, 2026-11-25 허락: 띄우는 방식만 바꿈).
 리눅스 전용 (/proc, D5).
 """
 
@@ -21,7 +22,7 @@ import tempfile
 import threading
 import time
 
-# ── 서버 설정 (L35) ──
+# ── 서버 설정 (L35, G15: 설정 파일 줄) ──
 
 HEADER_TIMEOUT = 1.0
 SEND_TIMEOUT = 1.0
@@ -30,11 +31,11 @@ LINGER_QUIET = 0.3
 LINGER_TOTAL = 1.5
 
 SHORT_TIMEOUT_OPTIONS = [
-    "--header-timeout-ms=1000",
-    "--send-timeout-ms=1000",
-    "--keepalive-timeout-ms=1000",
-    "--linger-quiet-ms=300",
-    "--linger-total-ms=1500",
+    "header_timeout 1000ms",
+    "send_timeout 1000ms",
+    "keepalive_timeout 1000ms",
+    "linger_quiet 300ms",
+    "linger_total 1500ms",
 ]
 
 # 시간 비교 여유: ASan 빌드와 Docker에서 늦어지는 만큼 위쪽으로만 넉넉히 둔다
@@ -134,7 +135,9 @@ class Server:
         self.stderr_path = os.path.join(base, name + ".stderr")
         self.stdout_file = open(self.stdout_path, "wb")
         self.stderr_file = open(self.stderr_path, "wb")
-        arguments = [binary, str(self.port), root] + options
+        self.config_path = os.path.join(base, name + ".conf")
+        write_config(self.config_path, self.port, root, options)
+        arguments = [binary, self.config_path]
         self.process = subprocess.Popen(
             arguments, stdout=self.stdout_file, stderr=self.stderr_file,
             preexec_fn=make_fd_limiter(fd_limit))
@@ -170,6 +173,14 @@ class Server:
                 self.process.wait()
         self.stdout_file.close()
         self.stderr_file.close()
+
+
+def write_config(path, port, root, lines):
+    """(G15) listen·root 뒤에 나머지 설정 줄을 붙인다"""
+    with open(path, "w") as file:
+        file.write("listen %d\nroot %s\n" % (port, root))
+        for line in lines:
+            file.write(line + "\n")
 
 
 def pick_free_port():
@@ -893,8 +904,8 @@ def measure_cpu_ratio(server, seconds):
 def test_i_connection_limit(binary, root):
     # 대기 중인 손님이 타임아웃으로 풀려나지 않도록 헤더·idle만 길게 둔다
     server = Server(binary, root.root, root.base, "limit",
-                    ["--header-timeout-ms=10000",
-                     "--keepalive-timeout-ms=10000"],
+                    ["header_timeout 10000ms",
+                     "keepalive_timeout 10000ms"],
                     fd_limit=FD_LIMIT_FOR_I1)
     clients = []
     try:
@@ -1009,7 +1020,7 @@ def test_k1_log_format(server, root):
 
 def test_k2_no_access_log(binary, root):
     server = Server(binary, root.root, root.base, "nolog",
-                    SHORT_TIMEOUT_OPTIONS + ["--no-access-log"])
+                    SHORT_TIMEOUT_OPTIONS + ["access_log off"])
     try:
         get(server.port, "/a.html")
         time.sleep(0.2)
@@ -1042,7 +1053,7 @@ def test_m1_fds_and_cards(server, baseline_fds):
     counts = [COUNT_LOG_PATTERN.match(line)
               for line in server.read_stderr().splitlines()]
     counts = [match for match in counts if match is not None]
-    check(counts, "no count line in stderr (--count-log)")
+    check(counts, "no count line in stderr (count_log on)")
     created, destroyed = counts[-1].group(1), counts[-1].group(2)
     check(created == destroyed, "created %s, destroyed %s"
           % (created, destroyed))
@@ -1117,7 +1128,7 @@ def main():
 
 def run_all(binary, root):
     server = Server(binary, root.root, root.base, "main",
-                    SHORT_TIMEOUT_OPTIONS + ["--count-log"])
+                    SHORT_TIMEOUT_OPTIONS + ["count_log on"])
     try:
         time.sleep(0.3)
         baseline_fds = server.count_fds()

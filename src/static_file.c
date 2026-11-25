@@ -16,10 +16,6 @@
 /* (S10) */
 #define INDEX_FILE_NAME "index.html"
 
-/* (B4, S2, S6) 1단계가 경로를 MAX_HEADER_SIZE 안으로 막아 준다.
- * 푼 경로와 정리한 경로는 원문보다 길어지지 않는다 */
-#define MAX_PATH_TEXT_SIZE (MAX_HEADER_SIZE + 1)
-
 typedef struct {
     const char * extension;
     const char * type;
@@ -94,7 +90,6 @@ char * copy_static_root (const char * path) {
 /* (R1d, R1g, R4c) 검사 순서는 step2-static.md 3번 표. 먼저 걸린 것에서 멈춘다 */
 void open_static_file (const request_t * request, const char * root,
                        static_result_t * result) {
-    char decoded[MAX_PATH_TEXT_SIZE];
     char normalized[MAX_PATH_TEXT_SIZE];
     char file_path[PATH_MAX];
     char real_path[PATH_MAX];
@@ -102,12 +97,10 @@ void open_static_file (const request_t * request, const char * root,
                                           request->path_length);
 
     reset_result(result, request);
-    result->head.status = decode_path(request->path, path_length, decoded);
+    result->head.status = normalize_request_path(request->path,
+                                                 request->path_length,
+                                                 normalized);
     if (result->head.status != 200) {
-        return;
-    }
-    if (!normalize_dots(decoded, normalized)) {
-        result->head.status = 403;
         return;
     }
     if (request->method == METHOD_POST) {
@@ -129,6 +122,22 @@ void open_static_file (const request_t * request, const char * root,
     }
     result->head.content_type = find_mime_type(file_path,
                                                strlen(file_path));
+}
+
+/* (S1~S6, S24, G3, G32) 검사 순서 1~3번만 (파일시스템은 보지 않는다) */
+int normalize_request_path (const char * path, size_t length,
+                            char * normalized) {
+    char decoded[MAX_PATH_TEXT_SIZE];
+    size_t path_length = find_query_start(path, length);
+
+    int status = decode_path(path, path_length, decoded);
+    if (status != 200) {
+        return status;
+    }
+    if (!normalize_dots(decoded, normalized)) {
+        return 403;
+    }
+    return 200;
 }
 
 /* (R1e, S14, S15, S17) */

@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "backend_conn.h"
 #include "connection.h"
 
 /* (L8) 3단계는 루프 1개 */
@@ -20,7 +21,8 @@
 #define FD_RESERVE_BASE 16
 /* (L8) 5단계에서 루프마다 epoll·eventfd */
 #define FD_PER_LOOP 2
-/* (L8) 손님 소켓 + 보내는 동안 연 파일 (4단계는 백엔드 소켓) */
+/* (L8, G19, G24) 손님 소켓 + 보내는 동안 연 파일 또는 백엔드 소켓.
+ * 재시도는 앞 백엔드 소켓을 닫은 뒤 새로 열어서 3개가 되지 않는다 */
 #define FD_PER_CONNECTION 2
 /* (L23) */
 #define LISTEN_RETRY_MS 100
@@ -36,6 +38,9 @@ static int find_wait_ms (loop_t * loop);
 static long long pick_earlier (long long current, long long candidate);
 static void handle_events (loop_t * loop, struct epoll_event * events,
                            int count);
+static conn_t * find_event_conn (void * pointer);
+static void dispatch_event (loop_t * loop, conn_t ** slot, void * pointer,
+                            uint32_t events);
 static void accept_connection (loop_t * loop);
 static void handle_accept_error (loop_t * loop);
 static void remove_listen (loop_t * loop);
@@ -48,7 +53,8 @@ static bool prepare_client_socket (int fd);
 /* ── 공개 함수 ── */
 
 /* (L1, L8, L22) 실패할 수 있는 일(한도 읽기, 할당, epoll)을 먼저 끝낸다 */
-loop_t * create_loop (const server_config_t * config, int listen_fd) {
+loop_t * create_loop (const server_config_t * config, upstream_t * upstream,
+                      int listen_fd) {
     size_t max_connections = 0;
     unsigned long long soft_limit = 0;
 
@@ -68,6 +74,7 @@ loop_t * create_loop (const server_config_t * config, int listen_fd) {
         return NULL;
     }
     loop->config = config;
+    loop->upstream = upstream;
     loop->listen_fd = listen_fd;
     loop->max_connections = max_connections;
     loop->retry_timer.owner = loop;
@@ -82,7 +89,8 @@ loop_t * create_loop (const server_config_t * config, int listen_fd) {
     return loop;
 }
 
-/* (R1a, L3, L29) 이벤트를 처리한 뒤 마감된 타이머를 처리한다 */
+/* (R1a, L3, L29, G25) 이벤트 → 마감된 타이머 → 정리한 카드 free 순서.
+ * free를 맨 끝에 해야 같은 묶음의 다른 이벤트가 카드를 볼 수 있다 */
 void run_loop (loop_t * loop) {
     struct epoll_event events[MAX_EVENTS_PER_WAIT];
 
@@ -98,6 +106,7 @@ void run_loop (loop_t * loop) {
         }
         handle_events(loop, events, count);
         expire_timers(loop);
+        free_closed_conns(loop);
     }
 }
 
@@ -168,12 +177,19 @@ static void report_error (const char * what) {
     fprintf(stderr, "%s: %s\n", what, strerror(errno));
 }
 
-/* (L5, L11, L12, L23, L29) */
+/* (L5, L11, L12, L23, L29, G11, G30) */
 static void set_timer_durations (loop_t * loop) {
     loop->header_timers.duration_ms = loop->config->header_timeout_ms;
     loop->send_timers.duration_ms = loop->config->send_timeout_ms;
     loop->idle_timers.duration_ms = loop->config->keepalive_timeout_ms;
     loop->quiet_timers.duration_ms = loop->config->linger_quiet_ms;
+    loop->body_timers.duration_ms = loop->config->body_timeout_ms;
+    loop->connect_timers.duration_ms =
+        loop->config->backend_connect_timeout_ms;
+    loop->backend_send_timers.duration_ms =
+        loop->config->backend_send_timeout_ms;
+    loop->backend_read_timers.duration_ms =
+        loop->config->backend_read_timeout_ms;
     loop->retry_timers.duration_ms = LISTEN_RETRY_MS;
 }
 
@@ -194,7 +210,9 @@ static bool add_listen (loop_t * loop) {
 static int find_wait_ms (loop_t * loop) {
     timer_list_t * lists[] = {
         &loop->header_timers, &loop->send_timers, &loop->idle_timers,
-        &loop->quiet_timers, &loop->retry_timers,
+        &loop->quiet_timers, &loop->body_timers, &loop->connect_timers,
+        &loop->backend_send_timers, &loop->backend_read_timers,
+        &loop->retry_timers,
     };
     long long now = read_clock_ms();
     long long wait = -1;
@@ -216,7 +234,8 @@ static long long pick_earlier (long long current, long long candidate) {
     return current;
 }
 
-/* (L1, L3) 카드는 자기 이벤트에서만 정리되므로 같은 묶음의 다른 이벤트는 안전 */
+/* (L1, L3, G25) 카드 하나에 fd가 둘이라 앞 이벤트가 카드를 정리했을 수 있다.
+ * 카드는 묶음이 끝날 때까지 free되지 않으므로 closed만 보고 건너뛴다 */
 static void handle_events (loop_t * loop, struct epoll_event * events,
                            int count) {
     for (int i = 0; i < count; i++) {
@@ -224,9 +243,33 @@ static void handle_events (loop_t * loop, struct epoll_event * events,
             accept_connection(loop);
             continue;
         }
-        conn_t * conn = events[i].data.ptr;
-        handle_conn_event(loop, &conn, events[i].events);
+        conn_t * conn = find_event_conn(events[i].data.ptr);
+        if (conn->closed) {
+            continue;
+        }
+        dispatch_event(loop, &conn, events[i].data.ptr, events[i].events);
     }
+}
+
+/* (G25) data.ptr은 카드(손님 fd) 또는 &conn->proxy(백엔드 fd).
+ * 둘 다 첫 필드가 종류 표시다 */
+static conn_t * find_event_conn (void * pointer) {
+    endpoint_kind_t kind = *(endpoint_kind_t *) pointer;
+
+    if (kind == ENDPOINT_BACKEND) {
+        return ((proxy_t *) pointer)->owner;
+    }
+    return pointer;
+}
+
+/* (G25) */
+static void dispatch_event (loop_t * loop, conn_t ** slot, void * pointer,
+                            uint32_t events) {
+    if (*(endpoint_kind_t *) pointer == ENDPOINT_BACKEND) {
+        handle_backend_event(loop, slot, events);
+        return;
+    }
+    handle_conn_event(loop, slot, events);
 }
 
 /* (R1a, L1, L8, L30) 한 번 깨어날 때 accept 1개. 같은 묶음 안에서
@@ -279,7 +322,7 @@ static bool is_ignorable_accept_error (int error) {
            || error == ECONNABORTED || error == EPROTO;
 }
 
-/* (L5, L23, L29) */
+/* (L5, L23, L29, G30) */
 static void expire_timers (loop_t * loop) {
     long long now = read_clock_ms();
 
@@ -287,6 +330,10 @@ static void expire_timers (loop_t * loop) {
     expire_list(loop, &loop->send_timers, now);
     expire_list(loop, &loop->idle_timers, now);
     expire_list(loop, &loop->quiet_timers, now);
+    expire_list(loop, &loop->body_timers, now);
+    expire_list(loop, &loop->connect_timers, now);
+    expire_list(loop, &loop->backend_send_timers, now);
+    expire_list(loop, &loop->backend_read_timers, now);
     if (find_expired_timer(&loop->retry_timers, now) != NULL) {
         retry_listen(loop);
     }

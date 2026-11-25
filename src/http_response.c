@@ -23,7 +23,7 @@ typedef struct {
     const char * reason;
 } status_reason_t;
 
-/* (R1g, S12, L34) 5번에 적힌 코드와 사유 문구 */
+/* (R1g, S12, L34, G38) 5번에 적힌 코드와 사유 문구 + 4단계 502·504 */
 static const status_reason_t status_reasons[] = {
     { 200, "OK" },
     { 301, "Moved Permanently" },
@@ -38,6 +38,8 @@ static const status_reason_t status_reasons[] = {
     { 431, "Request Header Fields Too Large" },
     { 500, "Internal Server Error" },
     { 501, "Not Implemented" },
+    { 502, "Bad Gateway" },
+    { 504, "Gateway Timeout" },
     { 505, "HTTP Version Not Supported" },
 };
 

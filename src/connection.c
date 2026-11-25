@@ -12,7 +12,14 @@
 #include <unistd.h>
 
 #include "access_log.h"
+#include "backend_conn.h"
 #include "http_response.h"
+#include "router.h"
+#include "upstream.h"
+
+/* (G7, G38) 손님에게 보내는 중간 응답. 끝의 '\0'은 보내지 않는다 */
+static const char CONTINUE_LINE[] = "HTTP/1.1 100 Continue\r\n\r\n";
+#define CONTINUE_LINE_LENGTH (sizeof(CONTINUE_LINE) - 1)
 
 static void read_request_head (loop_t * loop, conn_t ** slot);
 static bool is_retry_error (int error);
@@ -21,12 +28,19 @@ static void process_buffered_request (loop_t * loop, conn_t ** slot);
 static void respond_with_error (loop_t * loop, conn_t ** slot, int status);
 static void start_response (loop_t * loop, conn_t ** slot,
                             const response_head_t * head);
+static void begin_response (loop_t * loop, conn_t ** slot, size_t length,
+                            int status, size_t body_length);
 static char * copy_bytes (const char * source, size_t length);
 static void report_error (const char * what);
 static void enter_state (loop_t * loop, conn_t ** slot, conn_state_t state,
                          uint32_t events, timer_list_t * timers);
 static void start_request (loop_t * loop, conn_t ** slot,
                            size_t header_length);
+static void start_proxy_request (loop_t * loop, conn_t ** slot,
+                                 const route_t * route);
+static bool has_continue_expect (const request_t * request);
+static void receive_body_or_connect (loop_t * loop, conn_t ** slot);
+static void start_static_request (loop_t * loop, conn_t ** slot);
 static void decide_connection_close (conn_t * conn);
 static bool has_expect_header (const request_t * request);
 static void send_response (loop_t * loop, conn_t ** slot);
@@ -37,33 +51,43 @@ static bool is_response_sent (const conn_t * conn);
 static void finish_response (loop_t * loop, conn_t ** slot);
 static void log_request (loop_t * loop, conn_t * conn, const char * tag);
 static size_t find_request_line_length (const request_t * request);
+static void add_backend_entry (const loop_t * loop, const conn_t * conn,
+                               access_entry_t * entry);
 static void release_response (conn_t * conn);
 static void start_lingering (loop_t * loop, conn_t ** slot);
 static void start_discarding (loop_t * loop, conn_t ** slot);
 static void finish_request (loop_t * loop, conn_t ** slot);
 static void reset_request (conn_t * conn);
-static void send_file_chunk (loop_t * loop, conn_t ** slot);
+static void send_memory_chunk (loop_t * loop, conn_t ** slot);
 static size_t pick_chunk_size (size_t remaining);
+static void send_file_chunk (loop_t * loop, conn_t ** slot);
 static void discard_request_body (loop_t * loop, conn_t ** slot);
 static void keep_reading_quietly (loop_t * loop, conn_t ** slot);
 static void read_lingering (loop_t * loop, conn_t ** slot);
+static void send_continue (loop_t * loop, conn_t ** slot);
+static void read_request_body (loop_t * loop, conn_t ** slot);
 static void expire_header (loop_t * loop, conn_t ** slot);
+static void expire_body (loop_t * loop, conn_t ** slot);
 static void report_card_counts (const loop_t * loop);
 
 /* ── 공개 함수 ── */
 
-/* (L28) 카드가 커서(연결 버퍼 8KB) 복합 리터럴 대신 memset으로 비운다 */
+/* (L28, G25) 카드가 커서(연결 버퍼 8KB) 복합 리터럴 대신 memset으로 비운다 */
 conn_t * create_conn (int fd, const struct sockaddr_in * peer) {
     conn_t * conn = malloc(sizeof(*conn));
     if (conn == NULL) {
         return NULL;
     }
     memset(conn, 0, sizeof(*conn));
+    conn->kind = ENDPOINT_CLIENT;
     conn->fd = fd;
     conn->peer = *peer;
     conn->state = CONN_READ_HEAD;
     conn->result.fd = -1;
     conn->timer.owner = conn;
+    conn->proxy.kind = ENDPOINT_BACKEND;
+    conn->proxy.owner = conn;
+    conn->proxy.fd = -1;
     return conn;
 }
 
@@ -78,7 +102,8 @@ bool start_conn (loop_t * loop, conn_t * conn) {
     return true;
 }
 
-/* (L3, L24) 손님 half-close는 따로 보지 않고 read 0으로 안다 (L14, L27) */
+/* (L3, L24) 손님 half-close는 따로 보지 않고 read 0으로 안다 (L14, L27).
+ * 백엔드를 기다리는 동안은 끊김(FIN·HUP)만 본다 (G21) */
 void handle_conn_event (loop_t * loop, conn_t ** slot, uint32_t events) {
     if ((events & EPOLLERR) != 0) {
         destroy_conn(loop, slot, "reset");
@@ -98,44 +123,114 @@ void handle_conn_event (loop_t * loop, conn_t ** slot, uint32_t events) {
     case CONN_LINGER:
         read_lingering(loop, slot);
         return;
+    case CONN_CONTINUE:
+        send_continue(loop, slot);
+        return;
+    case CONN_READ_BODY:
+        read_request_body(loop, slot);
+        return;
+    case CONN_CONNECT:
+    case CONN_BACKEND_SEND:
+    case CONN_BACKEND_READ:
+        /* (G20, G21) 기다리는 중 손님이 떠남 → 백엔드도 같이 정리 */
+        destroy_conn(loop, slot, "close");
+        return;
     }
 }
 
-/* (L5, L6, L11, L12, L26) */
+/* (L5, L6, L11, L12, L26, G11, G30) */
 void expire_conn (loop_t * loop, conn_t ** slot) {
     switch ((*slot)->state) {
     case CONN_READ_HEAD:
         expire_header(loop, slot);
         return;
     case CONN_SEND:
+    case CONN_CONTINUE:
         /* (L6) 쓰기 막힘은 말없이 닫는다 */
         destroy_conn(loop, slot, "timeout");
+        return;
+    case CONN_READ_BODY:
+        expire_body(loop, slot);
         return;
     case CONN_IDLE:
     case CONN_DISCARD:
     case CONN_LINGER:
         destroy_conn(loop, slot, NULL);
         return;
+    case CONN_CONNECT:
+    case CONN_BACKEND_SEND:
+    case CONN_BACKEND_READ:
+        expire_backend(loop, slot);
+        return;
     }
 }
 
-/* (L28, R6a) close가 epoll에서도 뺀다 (fd를 dup하지 않으므로) */
+/* (L28, R6a, G20, G25, G26) close가 epoll에서도 뺀다 (fd를 dup하지 않으므로).
+ * 같은 묶음의 다른 이벤트가 카드를 볼 수 있어 free는 미룬다 */
 void destroy_conn (loop_t * loop, conn_t ** slot, const char * tag) {
     conn_t * conn = *slot;
 
-    if (conn == NULL) {
+    if (conn == NULL || conn->closed) {
         return;
     }
     log_request(loop, conn, tag);
     stop_timer(&conn->timer);
+    release_backend(loop, conn);
+    destroy_proxy(&conn->proxy);
     release_response(conn);
     destroy_request(&conn->request);
     close(conn->fd);
-    free(conn);
+    conn->closed = true;
+    conn->next_closed = loop->closed_conns;
+    loop->closed_conns = conn;
     *slot = NULL;
     loop->destroyed_count++;
     report_card_counts(loop);
     release_connection_slot(loop);
+}
+
+/* (G25) */
+void free_closed_conns (loop_t * loop) {
+    while (loop->closed_conns != NULL) {
+        conn_t * conn = loop->closed_conns;
+        loop->closed_conns = conn->next_closed;
+        free(conn);
+    }
+}
+
+/* (G12, G34, G36, L10) 본문을 다 받은 뒤라 연결 상태가 깨끗하다 */
+void respond_with_proxy_status (loop_t * loop, conn_t ** slot, int status) {
+    conn_t * conn = *slot;
+    response_head_t head = {
+        .status = status,
+        .keep_alive = conn->request.keep_alive && status != 500,
+    };
+
+    conn->close_after = !head.keep_alive;
+    start_response(loop, slot, &head);
+}
+
+/* (G10, G34, G40, G46) */
+void start_proxy_response (loop_t * loop, conn_t ** slot, size_t head_length,
+                           char * body, size_t body_start,
+                           size_t body_length, int status) {
+    conn_t * conn = *slot;
+
+    conn->close_after = !conn->request.keep_alive;
+    conn->response_body = body;
+    conn->response_body_start = body_start;
+    begin_response(loop, slot, head_length, status, body_length);
+}
+
+/* (G21) */
+bool watch_client (loop_t * loop, conn_t * conn, uint32_t events) {
+    struct epoll_event event = { .events = events, .data.ptr = conn };
+
+    if (epoll_ctl(loop->epoll_fd, EPOLL_CTL_MOD, conn->fd, &event) != 0) {
+        report_error("epoll_ctl");
+        return false;
+    }
+    return true;
 }
 
 /* ── 도우미 함수 ── */
@@ -204,7 +299,7 @@ static void process_buffered_request (loop_t * loop, conn_t ** slot) {
     start_request(loop, slot, header_length);
 }
 
-/* (B31, L6, L12) 오류 응답 뒤에는 항상 lingering으로 닫는다 */
+/* (B31, L6, L12, G44) 오류 응답 뒤에는 항상 lingering으로 닫는다 */
 static void respond_with_error (loop_t * loop, conn_t ** slot, int status) {
     response_head_t head = { .status = status, .keep_alive = false };
 
@@ -212,12 +307,24 @@ static void respond_with_error (loop_t * loop, conn_t ** slot, int status) {
     start_response(loop, slot, &head);
 }
 
-/* (R1f, L32) 헤더는 루프 버퍼에 쓰고 실제 길이만 카드에 복사한다.
- * 할당에 실패하면 응답할 길이 없어 말없이 닫는다 */
+/* (R1f, L32) 헤더는 루프 버퍼에 쓰고 실제 길이만 카드에 복사한다 */
 static void start_response (loop_t * loop, conn_t ** slot,
                             const response_head_t * head) {
     conn_t * conn = *slot;
     size_t length = write_response_head(head, time(NULL), loop->head);
+    size_t body_length = 0;
+
+    if (conn->result.fd >= 0) {
+        body_length = conn->result.head.content_length;
+    }
+    begin_response(loop, slot, length, head->status, body_length);
+}
+
+/* (R1f, L32, G40) loop->head의 length바이트를 카드로 복사하고 SEND로 간다.
+ * 할당에 실패하면 응답할 길이 없어 말없이 닫는다 */
+static void begin_response (loop_t * loop, conn_t ** slot, size_t length,
+                            int status, size_t body_length) {
+    conn_t * conn = *slot;
     char * copy = copy_bytes(loop->head, length);
 
     if (copy == NULL) {
@@ -228,12 +335,9 @@ static void start_response (loop_t * loop, conn_t ** slot,
     conn->response_head = copy;
     conn->response_head_length = length;
     conn->response_head_sent = 0;
-    conn->response_status = head->status;
-    conn->file_length = 0;
-    if (conn->result.fd >= 0) {
-        conn->file_length = conn->result.head.content_length;
-    }
-    conn->file_sent = 0;
+    conn->response_status = status;
+    conn->body_length = body_length;
+    conn->body_sent = 0;
     enter_state(loop, slot, CONN_SEND, EPOLLOUT, &loop->send_timers);
 }
 
@@ -268,23 +372,90 @@ static void enter_state (loop_t * loop, conn_t ** slot, conn_state_t state,
     start_timer(timers, &conn->timer, read_clock_ms());
 }
 
-/* (R1b, R1d, P13, P14, P25, B31, L20, L21) 3단계는 모든 요청이 정적이다.
- * 본문은 응답 뒤에 버린다. 닫을 연결이면 lingering이 같이 버린다 */
+/* (R1b, R2b, P13, P14, P25, B31, G3, G23) 파싱 → 라우팅.
+ * 정리 오류(400/403/404)는 정적 쪽이 같은 정리로 같은 코드를 낸다 (G3, G37) */
 static void start_request (loop_t * loop, conn_t ** slot,
                            size_t header_length) {
     conn_t * conn = *slot;
+    const route_t * route = NULL;
 
     if (!copy_request_head(&conn->request, conn->buffer, header_length)) {
         respond_with_error(loop, slot, 500);
         return;
     }
     remove_buffer_prefix(conn->buffer, &conn->buffer_length, header_length);
-    if (parse_request_head(conn->request.head, header_length,
-                           &conn->request) == PARSE_BAD) {
+    if (parse_request_head_limited(conn->request.head, header_length,
+                                   loop->config->max_body,
+                                   &conn->request) == PARSE_BAD) {
         respond_with_error(loop, slot, conn->request.status);
         return;
     }
     conn->has_parsed_request = true;
+    int status = find_route(loop->config, conn->request.path,
+                            conn->request.path_length, &route);
+    if (status == 200 && route != NULL) {
+        start_proxy_request(loop, slot, route);
+        return;
+    }
+    start_static_request(loop, slot);
+}
+
+/* (R2a, G7, G28, G33, G44) 요청 헤더를 미리 고치고 → 본문을 모으기 시작 →
+ * Expect면 100 Continue. 431·500은 닫는다 */
+static void start_proxy_request (loop_t * loop, conn_t ** slot,
+                                 const route_t * route) {
+    conn_t * conn = *slot;
+
+    int status = create_proxy(loop, conn, route);
+    if (status != 200) {
+        respond_with_error(loop, slot, status);
+        return;
+    }
+    if (start_collect_body(&conn->request, conn->buffer,
+                           &conn->buffer_length) == BODY_NO_MEMORY) {
+        respond_with_error(loop, slot, 500);
+        return;
+    }
+    if (has_continue_expect(&conn->request)) {
+        conn->continue_sent = 0;
+        enter_state(loop, slot, CONN_CONTINUE, EPOLLOUT, &loop->send_timers);
+        return;
+    }
+    receive_body_or_connect(loop, slot);
+}
+
+/* (G7, G38) 값이 100-continue일 때만 (대소문자 무시) */
+static bool has_continue_expect (const request_t * request) {
+    size_t position = 0;
+    header_view_t line;
+
+    while (next_header_line(request->headers, request->headers_length,
+                            &position, &line) == LINE_OK) {
+        if (line.name_length == 6 && strncasecmp(line.name, "Expect", 6) == 0
+            && line.value_length == 12
+            && strncasecmp(line.value, "100-continue", 12) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* (P11, G11) 본문을 다 받았으면 백엔드로, 아니면 본문 받기 */
+static void receive_body_or_connect (loop_t * loop, conn_t ** slot) {
+    conn_t * conn = *slot;
+
+    if (conn->request.body_received == conn->request.content_length) {
+        start_backend(loop, slot);
+        return;
+    }
+    enter_state(loop, slot, CONN_READ_BODY, EPOLLIN, &loop->body_timers);
+}
+
+/* (R1d, L20, L21) 3단계 정적 처리 그대로. 본문은 응답 뒤에 버린다.
+ * 닫을 연결이면 lingering이 같이 버린다 */
+static void start_static_request (loop_t * loop, conn_t ** slot) {
+    conn_t * conn = *slot;
+
     open_static_file(&conn->request, loop->config->root, &conn->result);
     decide_connection_close(conn);
     if (!conn->close_after && conn->request.content_length > 0) {
@@ -323,12 +494,17 @@ static bool has_expect_header (const request_t * request) {
     return false;
 }
 
-/* (R1f, R3c, L30) 한 번 깨어날 때 쓰기 1번: 헤더 남은 것, 아니면 조각 하나 */
+/* (R1f, R3c, L30, G40) 한 번 깨어날 때 쓰기 1번: 헤더 남은 것,
+ * 아니면 본문 조각 하나 (메모리 또는 파일) */
 static void send_response (loop_t * loop, conn_t ** slot) {
     conn_t * conn = *slot;
 
     if (conn->response_head_sent < conn->response_head_length) {
         send_head_part(loop, slot);
+        return;
+    }
+    if (conn->response_body != NULL) {
+        send_memory_chunk(loop, slot);
         return;
     }
     send_file_chunk(loop, slot);
@@ -373,7 +549,7 @@ static void note_progress (loop_t * loop, conn_t ** slot, size_t written) {
 /* (R1f, L16) */
 static bool is_response_sent (const conn_t * conn) {
     return conn->response_head_sent == conn->response_head_length
-           && conn->file_sent == conn->file_length;
+           && conn->body_sent == conn->body_length;
 }
 
 /* (L12, L13, L15, L21) 응답 끝: 닫기 / 본문 버리기 / 다음 요청 */
@@ -397,7 +573,7 @@ static void finish_response (loop_t * loop, conn_t ** slot) {
     finish_request(loop, slot);
 }
 
-/* (L15, L26, L37) 요청 하나에 한 줄. 받은 바이트가 0이면 찍지 않는다 */
+/* (L15, L26, L37, G18) 요청 하나에 한 줄. 받은 바이트가 0이면 찍지 않는다 */
 static void log_request (loop_t * loop, conn_t * conn, const char * tag) {
     if (conn->is_logged || !conn->has_received) {
         return;
@@ -419,6 +595,7 @@ static void log_request (loop_t * loop, conn_t * conn, const char * tag) {
         entry.request_line = conn->request.head;
         entry.request_line_length = find_request_line_length(&conn->request);
     }
+    add_backend_entry(loop, conn, &entry);
     write_access_log(&entry);
 }
 
@@ -432,10 +609,29 @@ static size_t find_request_line_length (const request_t * request) {
     return (size_t) (end - request->head);
 }
 
-/* (L32, S11) 두 번 불러도 안전 */
+/* (G18, G39) connect를 한 번이라도 한 요청만. 백엔드를 아직 쥐고 있으면
+ * 지금까지 걸린 시간 */
+static void add_backend_entry (const loop_t * loop, const conn_t * conn,
+                               access_entry_t * entry) {
+    const proxy_t * proxy = &conn->proxy;
+    long long end_ms = proxy->fd >= 0 ? read_clock_ms() : proxy->finished_ms;
+
+    if (proxy->route == NULL || proxy->attempts == 0) {
+        return;
+    }
+    entry->backend = find_backend_address(loop->upstream, proxy->route,
+                                          proxy->position);
+    entry->retry_count = proxy->attempts - 1;
+    entry->backend_ms = end_ms - proxy->started_ms;
+    entry->backend_cause = proxy->cause;
+}
+
+/* (L32, S11, G46) 두 번 불러도 안전 */
 static void release_response (conn_t * conn) {
     free(conn->response_head);
     conn->response_head = NULL;
+    free(conn->response_body);
+    conn->response_body = NULL;
     close_static_file(&conn->result);
 }
 
@@ -475,28 +671,53 @@ static void finish_request (loop_t * loop, conn_t ** slot) {
     process_buffered_request(loop, slot);
 }
 
-/* (P24, L24) 다음 요청을 위해 요청 하나 몫의 필드를 비운다 */
+/* (P24, L24, G26) 다음 요청을 위해 요청 하나 몫의 필드를 비운다.
+ * 백엔드 연결은 응답을 다 받을 때 이미 놓았다 */
 static void reset_request (conn_t * conn) {
     destroy_request(&conn->request);
+    destroy_proxy(&conn->proxy);
     conn->has_parsed_request = false;
     conn->has_received = false;
     conn->is_logged = false;
     conn->finish_tag = NULL;
     conn->response_status = 0;
     conn->bytes_sent = 0;
-    conn->file_length = 0;
-    conn->file_sent = 0;
+    conn->body_length = 0;
+    conn->body_sent = 0;
+    conn->response_body_start = 0;
+    conn->continue_sent = 0;
     conn->response_head_length = 0;
     conn->response_head_sent = 0;
+}
+
+/* (G40) 메모리 본문도 L30처럼 한 번에 8KB 조각 하나 */
+static void send_memory_chunk (loop_t * loop, conn_t ** slot) {
+    conn_t * conn = *slot;
+    size_t wanted = pick_chunk_size(conn->body_length - conn->body_sent);
+    ssize_t written = write(conn->fd,
+                            conn->response_body + conn->response_body_start
+                            + conn->body_sent, wanted);
+
+    if (written < 0) {
+        handle_write_error(loop, slot);
+        return;
+    }
+    conn->body_sent += (size_t) written;
+    note_progress(loop, slot, (size_t) written);
+}
+
+/* (L9, L16, G40) Content-Length보다 더 읽지 않는다 */
+static size_t pick_chunk_size (size_t remaining) {
+    return remaining < FILE_CHUNK_SIZE ? remaining : FILE_CHUNK_SIZE;
 }
 
 /* (L9, L16) 보낸 위치부터 pread. 덜 보낸 부분은 다음에 다시 읽는다.
  * 파일이 약속보다 먼저 끝나면(줄어듦) 닫는다 */
 static void send_file_chunk (loop_t * loop, conn_t ** slot) {
     conn_t * conn = *slot;
-    size_t wanted = pick_chunk_size(conn->file_length - conn->file_sent);
+    size_t wanted = pick_chunk_size(conn->body_length - conn->body_sent);
     ssize_t read_count = pread(conn->result.fd, loop->chunk, wanted,
-                               (off_t) conn->file_sent);
+                               (off_t) conn->body_sent);
 
     if (read_count < 0) {
         report_error("pread");
@@ -512,13 +733,8 @@ static void send_file_chunk (loop_t * loop, conn_t ** slot) {
         handle_write_error(loop, slot);
         return;
     }
-    conn->file_sent += (size_t) written;
+    conn->body_sent += (size_t) written;
     note_progress(loop, slot, (size_t) written);
-}
-
-/* (L9, L16) Content-Length보다 더 읽지 않는다 */
-static size_t pick_chunk_size (size_t remaining) {
-    return remaining < FILE_CHUNK_SIZE ? remaining : FILE_CHUNK_SIZE;
 }
 
 /* (L11, L14, L20, L33) 남은 본문만큼만 읽어서 다음 요청 경계를 지킨다 */
@@ -577,12 +793,62 @@ static void read_lingering (loop_t * loop, conn_t ** slot) {
     keep_reading_quietly(loop, slot);
 }
 
+/* (G7, G38, L5) 부분 쓰기를 이어 간다. 다 보내면 본문 받기 또는 백엔드로 */
+static void send_continue (loop_t * loop, conn_t ** slot) {
+    conn_t * conn = *slot;
+    ssize_t written = write(conn->fd, CONTINUE_LINE + conn->continue_sent,
+                            CONTINUE_LINE_LENGTH - conn->continue_sent);
+
+    if (written < 0) {
+        handle_write_error(loop, slot);
+        return;
+    }
+    conn->continue_sent += (size_t) written;
+    if (conn->continue_sent < CONTINUE_LINE_LENGTH) {
+        start_timer(&loop->send_timers, &conn->timer, read_clock_ms());
+        return;
+    }
+    receive_body_or_connect(loop, slot);
+}
+
+/* (R2a, R3c, P11, P26, L5, L14, L30) 한 번 깨어날 때 읽기 1번,
+ * 남은 본문만큼만. 본문 타임아웃은 "사이"라 읽을 때마다 다시 건다 */
+static void read_request_body (loop_t * loop, conn_t ** slot) {
+    conn_t * conn = *slot;
+    request_t * request = &conn->request;
+    ssize_t count = read(conn->fd, request->body + request->body_received,
+                         request->content_length - request->body_received);
+
+    if (count < 0) {
+        if (is_retry_error(errno)) {
+            return;
+        }
+        destroy_conn(loop, slot, "reset");
+        return;
+    }
+    if (count == 0) {
+        destroy_conn(loop, slot, "close");
+        return;
+    }
+    if (add_body_bytes(request, (size_t) count) == BODY_DONE) {
+        start_backend(loop, slot);
+        return;
+    }
+    start_timer(&loop->body_timers, &conn->timer, read_clock_ms());
+}
+
 /* (L6, L26) 1바이트라도 받았으면 408, 아니면 말없이 닫는다 */
 static void expire_header (loop_t * loop, conn_t ** slot) {
     if (!(*slot)->has_received) {
         destroy_conn(loop, slot, NULL);
         return;
     }
+    (*slot)->finish_tag = "timeout";
+    respond_with_error(loop, slot, 408);
+}
+
+/* (L5, L6) 본문 수신 중 타임아웃은 408 + close */
+static void expire_body (loop_t * loop, conn_t ** slot) {
     (*slot)->finish_tag = "timeout";
     respond_with_error(loop, slot, 408);
 }

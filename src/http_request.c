@@ -31,7 +31,7 @@ static bool is_broken_line_end (const char * buffer, size_t scan_length,
 static bool is_header_end_at (const char * buffer, size_t i);
 static char * copy_bytes (const char * source, size_t length);
 static int parse_request_parts (const char * head, size_t head_length,
-                                request_t * parsed);
+                                size_t max_body, request_t * parsed);
 static size_t find_line_end (const char * text, size_t length,
                              size_t start);
 static int parse_request_line (const char * line, size_t length,
@@ -60,7 +60,7 @@ static bool is_blank (char letter);
 static int check_host (const header_summary_t * summary,
                        request_t * parsed);
 static int parse_content_length (const header_summary_t * summary,
-                                 request_t * parsed);
+                                 size_t max_body, request_t * parsed);
 static bool is_all_digits (text_view_t value);
 static bool read_limited_number (text_view_t value, size_t limit,
                                  size_t * number);
@@ -128,12 +128,20 @@ bool copy_request_head (request_t * request, const char * buffer,
     return true;
 }
 
-/* (R1b, R1c, R4a, B32) BAD에서 status 외 필드를 건드리지 않으려고
- * 따로 모은 뒤 성공했을 때만 옮긴다 */
+/* (R1b, R1c, G23) 1단계 기본 상한 MAX_BODY_SIZE로 부르는 감싸개 */
 parse_result parse_request_head (const char * head, size_t head_length,
                                  request_t * request) {
+    return parse_request_head_limited(head, head_length, MAX_BODY_SIZE,
+                                      request);
+}
+
+/* (R1b, R1c, R4a, B32, G9, G23) BAD에서 status 외 필드를 건드리지 않으려고
+ * 따로 모은 뒤 성공했을 때만 옮긴다 */
+parse_result parse_request_head_limited (const char * head,
+                                         size_t head_length, size_t max_body,
+                                         request_t * request) {
     request_t parsed = {0};
-    int status = parse_request_parts(head, head_length, &parsed);
+    int status = parse_request_parts(head, head_length, max_body, &parsed);
     if (status != 0) {
         request->status = status;
         return PARSE_BAD;
@@ -185,6 +193,15 @@ body_result start_body (request_t * request, char * buffer,
 body_result start_discard_body (request_t * request, char * buffer,
                                 size_t * buffer_length) {
     return start_discard(request, buffer, buffer_length);
+}
+
+/* (G33) 프록시로 가는 요청은 GET 본문도 모은다 */
+body_result start_collect_body (request_t * request, char * buffer,
+                                size_t * buffer_length) {
+    if (request->content_length == 0) {
+        return BODY_DONE;
+    }
+    return start_collect(request, buffer, buffer_length);
 }
 
 /* (R3c, P10, P26, L20, L25) 버리는 중인지는 discard_remaining으로 본다.
@@ -261,7 +278,7 @@ static char * copy_bytes (const char * source, size_t length) {
 /* (R1b, R1c, B32, P18) 명세 5번 검사 순서 그대로.
  * 반환: 0 = 성공, 아니면 응답 코드 */
 static int parse_request_parts (const char * head, size_t head_length,
-                                request_t * parsed) {
+                                size_t max_body, request_t * parsed) {
     header_summary_t summary = {0};
     size_t line_end = find_line_end(head, head_length, 0);
 
@@ -281,7 +298,7 @@ static int parse_request_parts (const char * head, size_t head_length,
     if (summary.has_transfer_encoding) {
         return 501;
     }
-    status = parse_content_length(&summary, parsed);
+    status = parse_content_length(&summary, max_body, parsed);
     if (status != 0) {
         return status;
     }
@@ -526,7 +543,7 @@ static int check_host (const header_summary_t * summary,
 
 /* (B3, B4, B30, P9, P10, P31) 반환: 0 = 성공, 아니면 응답 코드 */
 static int parse_content_length (const header_summary_t * summary,
-                                 request_t * parsed) {
+                                 size_t max_body, request_t * parsed) {
     if (summary->length_count > 1) {
         return 400;
     }
@@ -536,7 +553,7 @@ static int parse_content_length (const header_summary_t * summary,
     if (!is_all_digits(summary->length)) {
         return 400;
     }
-    if (!read_limited_number(summary->length, MAX_BODY_SIZE,
+    if (!read_limited_number(summary->length, max_body,
                              &parsed->content_length)) {
         return 413;
     }
