@@ -24,6 +24,8 @@
 #define DEFAULT_BACKEND_SEND_TIMEOUT_MS 60000
 #define DEFAULT_BACKEND_READ_TIMEOUT_MS 60000
 #define DEFAULT_BACKEND_FAIL_TIMEOUT_MS 10000
+/* (E5, B27) docker stop의 10초(이후 SIGKILL) 안에 정리를 끝낸다 */
+#define DEFAULT_SHUTDOWN_TIMEOUT_MS 5000
 /* (B4, G9) */
 #define DEFAULT_MAX_BODY MAX_BODY_SIZE
 #define DEFAULT_MAX_BACKEND_RESPONSE (8 * 1024 * 1024)
@@ -174,11 +176,12 @@ static void set_default_config (server_config_t * config) {
     config->backend_send_timeout_ms = DEFAULT_BACKEND_SEND_TIMEOUT_MS;
     config->backend_read_timeout_ms = DEFAULT_BACKEND_READ_TIMEOUT_MS;
     config->backend_fail_timeout_ms = DEFAULT_BACKEND_FAIL_TIMEOUT_MS;
+    config->shutdown_timeout_ms = DEFAULT_SHUTDOWN_TIMEOUT_MS;
     config->max_body = DEFAULT_MAX_BODY;
     config->max_backend_response = DEFAULT_MAX_BACKEND_RESPONSE;
 }
 
-/* (G15, L35) 4번 표 항목. 파일 읽기 → 필수 항목·값 사이 검사 → root 확인 */
+/* (G15, L35, E5) 4번 표 항목 + shutdown_timeout. 파일 읽기 → 필수 항목·값 사이 검사 → root 확인 */
 static config_result_t read_settings (const char * path,
                                       server_config_t * config, char * error,
                                       size_t error_size) {
@@ -200,6 +203,7 @@ static config_result_t read_settings (const char * path,
           &config->backend_read_timeout_ms, 0 },
         { "backend_fail_timeout", VALUE_TIME,
           &config->backend_fail_timeout_ms, 0 },
+        { "shutdown_timeout", VALUE_TIME, &config->shutdown_timeout_ms, 0 },
         { "max_body", VALUE_SIZE, &config->max_body, 0 },
         { "max_backend_response", VALUE_SIZE,
           &config->max_backend_response, 0 },

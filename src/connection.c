@@ -198,6 +198,23 @@ void free_closed_conns (loop_t * loop) {
     }
 }
 
+/* (E4) IDLE과 1바이트도 안 온 READ_HEAD는 바로 닫는다. 나머지는 요청의
+ * keep-alive를 끄고(아직 안 만든 응답에 Connection: close), 이미 보내는 중인
+ * 응답은 헤더를 바꿀 수 없어 보낸 뒤 닫는다. LINGER·DISCARD는 그대로 둔다 */
+void shut_down_conn (loop_t * loop, conn_t ** slot) {
+    conn_t * conn = *slot;
+
+    if (conn->state == CONN_IDLE
+        || (conn->state == CONN_READ_HEAD && !conn->has_received)) {
+        destroy_conn(loop, slot, NULL);
+        return;
+    }
+    conn->request.keep_alive = false;
+    if (conn->state == CONN_SEND) {
+        conn->close_after = true;
+    }
+}
+
 /* (G12, G34, G36, L10) 본문을 다 받은 뒤라 연결 상태가 깨끗하다 */
 void respond_with_proxy_status (loop_t * loop, conn_t ** slot, int status) {
     conn_t * conn = *slot;
@@ -391,6 +408,10 @@ static void start_request (loop_t * loop, conn_t ** slot,
         return;
     }
     conn->has_parsed_request = true;
+    if (loop->is_shutting_down) {
+        /* (E4) 종료 중에 헤더가 완성된 요청도 응답 뒤 닫는다 */
+        conn->request.keep_alive = false;
+    }
     int status = find_route(loop->config, conn->request.path,
                             conn->request.path_length, &route);
     if (status == 200 && route != NULL) {
@@ -652,10 +673,15 @@ static void start_discarding (loop_t * loop, conn_t ** slot) {
     enter_state(loop, slot, CONN_DISCARD, EPOLLIN, &loop->quiet_timers);
 }
 
-/* (R3d, L13) epoll은 커널 버퍼만 보므로 우리 버퍼를 먼저 확인한다 */
+/* (R3d, L13, E4) epoll은 커널 버퍼만 보므로 우리 버퍼를 먼저 확인한다.
+ * 종료 중에는 다음 요청을 받지 않고 닫는다 (본문 버리기가 끝난 경우) */
 static void finish_request (loop_t * loop, conn_t ** slot) {
     conn_t * conn = *slot;
 
+    if (loop->is_shutting_down) {
+        destroy_conn(loop, slot, NULL);
+        return;
+    }
     reset_request(conn);
     if (conn->buffer_length == 0) {
         enter_state(loop, slot, CONN_IDLE, EPOLLIN, &loop->idle_timers);

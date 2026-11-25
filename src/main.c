@@ -13,18 +13,21 @@
 #include "server_config.h"
 #include "upstream.h"
 
-/* (L35, G31) 명령·설정을 잘못 씀 = 2, 환경이 잘못됨 = 1 */
+/* (L35, G31, E6) 명령·설정을 잘못 씀 = 2, 환경이 잘못됨 = 1, 정상 종료 = 0 */
 #define EXIT_USAGE 2
 #define EXIT_SETUP 1
+#define EXIT_SHUTDOWN 0
 
 static void prepare_process (void);
 static int pick_exit_code (config_result_t result);
+static void close_access_log (void);
 static int create_listen_socket (int port);
 static bool configure_listen_socket (int fd, int port);
 
 /* ── 공개 함수 ── */
 
-/* (L17, L22, G15, G29, G31) ./server <설정 파일> */
+/* (L17, L22, G15, G29, G31, E5, E6) ./server <설정 파일>.
+ * 정상 종료면 루프 → upstream → 설정 순서로 풀고 접근 로그를 닫은 뒤 0 */
 int main (int argc, char ** argv) {
     server_config_t config;
     char error[CONFIG_ERROR_SIZE];
@@ -59,8 +62,12 @@ int main (int argc, char ** argv) {
         destroy_server_config(&config);
         return EXIT_SETUP;
     }
-    run_loop(loop);
-    return EXIT_SETUP;
+    bool is_shutdown = run_loop(loop);
+    destroy_loop(loop);
+    destroy_upstream(upstream);
+    destroy_server_config(&config);
+    close_access_log();
+    return is_shutdown ? EXIT_SHUTDOWN : EXIT_SETUP;
 }
 
 /* ── 도우미 함수 ── */
@@ -75,6 +82,12 @@ static void prepare_process (void) {
 /* (G31) */
 static int pick_exit_code (config_result_t result) {
     return result == CONFIG_INVALID ? EXIT_USAGE : EXIT_SETUP;
+}
+
+/* (E5, L15) 접근 로그는 stdout. 남은 줄을 내보내고 닫는다 */
+static void close_access_log (void) {
+    fflush(stdout);
+    fclose(stdout);
 }
 
 /* (R1a) 반환: listen 중인 non-blocking 소켓, -1 = 실패 (stderr에 이유) */

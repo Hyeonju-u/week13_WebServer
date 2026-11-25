@@ -44,6 +44,8 @@ typedef struct {
     long long backend_send_timeout_ms;
     long long backend_read_timeout_ms;
     long long backend_fail_timeout_ms;
+    /* (E5, B27) 정상 종료 마감 */
+    long long shutdown_timeout_ms;
     size_t max_body;
     size_t max_backend_response;
     /* 소유. 적힌 순서 그대로 (G2 먼저 적힌 규칙) */

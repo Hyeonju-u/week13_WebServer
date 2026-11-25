@@ -140,6 +140,10 @@ void destroy_conn (loop_t * loop, conn_t ** slot, const char * tag);
 /* (G25) epoll_wait 묶음과 타이머 처리가 끝난 뒤에 부른다 */
 void free_closed_conns (loop_t * loop);
 
+/* (E4) 정상 종료가 시작될 때 카드마다 부른다. 진행 중인 요청이 없으면 바로
+ * 정리하고(*slot이 NULL), 있으면 끝내게 두되 그 응답 뒤에는 닫는다 */
+void shut_down_conn (loop_t * loop, conn_t ** slot);
+
 /* (G12, G34, G36) 우리가 만든 502·504·500 응답. 본문은 이미 다 받았다.
  * 500은 닫고(L10), 나머지는 요청의 keep-alive를 따른다 */
 void respond_with_proxy_status (loop_t * loop, conn_t ** slot, int status);

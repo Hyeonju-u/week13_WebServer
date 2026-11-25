@@ -6,7 +6,8 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g -D_XOPEN_SOURCE=700 -Iinclude
 ASAN_FLAGS = -fsanitize=address,leak -fno-omit-frame-pointer
-# (L19, L40) 서버는 끝나는 방법이 없어 leak 검사는 6단계에서
+# (L19, E5) 6단계부터 서버가 정상 종료하므로 LeakSanitizer(ASan 기본 켬)가
+# 종료 때 누수를 본다
 SERVER_ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
 REQUEST_SOURCES = src/http_request.c
@@ -28,6 +29,7 @@ SERVER_HEADERS = include/http_request.h include/http_response.h \
                  include/connection.h include/backend_conn.h \
                  include/event_loop.h
 INTEGRATION_TEST = tests/test_proxy.py
+SHUTDOWN_TEST = tests/test_shutdown.py
 
 UNIT_TESTS = build/test_http_request build/test_static_file \
              build/test_server_config build/test_router
@@ -51,10 +53,12 @@ server-asan: build/server_asan
 
 itest: build/server
 	python3 $(INTEGRATION_TEST) build/server
+	python3 $(SHUTDOWN_TEST) build/server
 
+# (E5, SD-7) 누수 검사를 켠 채로 3·4·6단계
 itest-asan: build/server_asan
-	ASAN_OPTIONS=detect_leaks=0 python3 $(INTEGRATION_TEST) \
-		build/server_asan
+	python3 $(INTEGRATION_TEST) build/server_asan
+	python3 $(SHUTDOWN_TEST) build/server_asan --asan
 
 build/test_http_request: $(REQUEST_SOURCES) tests/test_http_request.c $(HEADERS)
 	mkdir -p build

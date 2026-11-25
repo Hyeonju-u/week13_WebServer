@@ -22,7 +22,15 @@ typedef struct {
     /* (G29) 백엔드 실행 중 상태 (빌림) */
     upstream_t * upstream;
     int epoll_fd;
+    /* (E3) 소유. 종료가 시작되면 닫고 -1 */
     int listen_fd;
+    /* (E1) 소유. SIGINT·SIGTERM을 읽는 signalfd */
+    int signal_fd;
+    /* (E2~E5) 종료 시작 / 루프를 빠져나감 */
+    bool is_shutting_down;
+    bool is_finished;
+    /* (E7) 마감으로 강제로 닫은 연결 수 */
+    size_t forced_count;
     /* (L8) listen 소켓이 지금 epoll에 들어 있는지 */
     bool is_listening;
     size_t connection_count;
@@ -40,6 +48,9 @@ typedef struct {
     /* (L23) listen 다시 넣기 */
     timer_list_t retry_timers;
     timer_node_t retry_timer;
+    /* (E5) 정상 종료 마감 */
+    timer_list_t shutdown_timers;
+    timer_node_t shutdown_timer;
     /* (G25) 정리했지만 아직 free하지 않은 카드. 묶음 처리가 끝나면 푼다 */
     struct conn * closed_conns;
     /* (L19, L36) */
@@ -53,14 +64,21 @@ typedef struct {
 
 /* ── 공개 함수 ── */
 
-/* (L1, L8, L22, G29) config·upstream·listen_fd는 빌림.
- * listen_fd: non-blocking으로 listen 중인 소켓.
+/* (L1, L8, L22, G29, E1, E3) config·upstream은 빌림.
+ * listen_fd: non-blocking으로 listen 중인 소켓. 성공하면 넘겨받는다
+ * (종료 시작 때 루프가 닫음), 실패하면 호출자가 닫는다.
+ * SIGINT·SIGTERM을 막고 signalfd로 받는다.
  * 시작 줄(최대 연결 수)을 stderr에 찍는다. 반환: NULL = 실패 (stderr에 이유) */
 loop_t * create_loop (const server_config_t * config, upstream_t * upstream,
                       int listen_fd);
 
-/* (R1a, L3, G25) 끝나지 않는다. 돌아오면 epoll_wait 실패 (stderr에 이유) */
-void run_loop (loop_t * loop);
+/* (R1a, L3, G25, E2~E5) 정상 종료가 끝나면 돌아온다.
+ * 반환: true = 정상 종료 (E6), false = epoll_wait 실패 (stderr에 이유) */
+bool run_loop (loop_t * loop);
+
+/* (E5) 남은 카드 정리 → epoll·signalfd·listen 닫기 → 루프 free.
+ * 설정·upstream은 호출자가 푼다 */
+void destroy_loop (loop_t * loop);
 
 /* (L1) 받은 fd를 등록하는 입구. 5단계에서 큐 + 벨(D6)로 바뀐다.
  * fd: 넘겨받는다. 실패하면 이 함수가 닫는다 */
