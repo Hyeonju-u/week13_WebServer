@@ -1,0 +1,27 @@
+[
+ {
+  "name": "cap",
+  "max_connections": 5000,
+  "peak_fd": 5010,
+  "peak_fd_after_extras": 5010,
+  "extras_connected": 128,
+  "served_while_full": 0,
+  "served_after_free": 128,
+  "elapsed": 6.6
+ },
+ {
+  "name": "proxy",
+  "connections": 100,
+  "seconds": 10,
+  "codes": {
+   "200": 360199,
+   "502": 155
+  },
+  "rps": 35985.57,
+  "ratio_502": 0.0004,
+  "proxy_cpu_percent": 81,
+  "backend_cpu_percent": 86,
+  "socket_errors": 0,
+  "time_wait_at_start": 3
+ }
+]
