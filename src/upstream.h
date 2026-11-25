@@ -1,17 +1,19 @@
 #ifndef UPSTREAM_H
 #define UPSTREAM_H
 
+#include <stdatomic.h>
 #include <stddef.h>
 
 #include "proxy_config.h"
 
 /*
  * 설정(proxy_config_t)은 시작한 뒤 바뀌지 않는다. 실행 중에 바뀌는 분배 차례와
- * 빠진 시각은 여기에만 둔다. 루프를 여러 개로 늘릴 때 나눠 쓸 곳이 한 곳이 된다.
+ * 빠진 시각은 여기에만 둔다. 서버 전체에 하나를 만들어 모든 루프가 같이 쓰므로
+ * 값마다 원자 변수다. 잠금은 쓰지 않는다 (M5, M7)
  */
 typedef struct {
-    size_t next_index;
-    long long * failed_until_ms;
+    atomic_size_t next_index;
+    atomic_llong * failed_until_ms;
 } route_state_t;
 
 typedef struct {

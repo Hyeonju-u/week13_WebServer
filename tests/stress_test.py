@@ -20,7 +20,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (Checker, PythonBackend, Server, find_free_port, fingerprint, LOCALHOST)
+from harness import (Checker, PythonBackend, Server, count_extra_loop_fds, find_free_port, fingerprint, LOCALHOST)
 
 checker = Checker()
 check = checker.check
@@ -221,7 +221,7 @@ async def scenario_many_connections(base, count, max_connections, rounds):
         held, errors, wrong, peak = await hold_and_fetch(server, count)
         check("TST-11 동시 %d개 연결 성립 (연결 오류 %d)" % (count, errors), errors == 0)
         check("TST-11 %d개 연결이 동시에 요청해 모두 정확한 응답 (오류 %d)" % (held, wrong), wrong == 0)
-        check("TST-11 서버 fd 수가 연결 수를 넘지 않음 (%d)" % peak, peak <= max_connections + 30)
+        check("TST-11 서버 fd 수가 연결 수를 넘지 않음 (%d)" % peak, peak <= max_connections + 30 + count_extra_loop_fds())
         record("TST-11", round=index + 1, connections=held, elapsed=round(time.time() - started, 1),
                peak_fd=peak, errors=errors + wrong)
         if stable is None and rounds > 1:
@@ -241,7 +241,7 @@ async def scenario_over_limit_wrk(base, max_connections, requested):
     await asyncio.sleep(12)
     peak = server.fd_count()
     check("TST-11 상한 초과(%d개 시도) 중 서버 생존, 활성 연결이 상한 이하 (fd %d ≤ %d)"
-          % (requested, peak, max_connections + 30), server.is_alive and peak <= max_connections + 30)
+          % (requested, peak, max_connections + 30 + count_extra_loop_fds()), server.is_alive and peak <= max_connections + 30 + count_extra_loop_fds())
     result = await load
     check("TST-11 상한 초과 부하가 끝난 뒤에도 서버 생존", server.is_alive)
     reader, writer = await open_connection(server.port, 10)
@@ -295,7 +295,7 @@ async def scenario_over_limit_small(base, max_connections, requested):
     peak = server.fd_count()
     served_before = len(stats["ok"])
     check("TST-11 (소규모) 상한 %d 초과 시도 중 활성 연결이 상한 이하 (fd %d ≤ %d)"
-          % (max_connections, peak, max_connections + 30), server.is_alive and peak <= max_connections + 30)
+          % (max_connections, peak, max_connections + 30 + count_extra_loop_fds()), server.is_alive and peak <= max_connections + 30 + count_extra_loop_fds())
     events["release"].set()
     await asyncio.sleep(25)
     events["stop"].set()

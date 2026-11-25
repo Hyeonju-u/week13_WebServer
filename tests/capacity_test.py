@@ -23,7 +23,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Checker, Server, get, LOCALHOST  # noqa: E402
+from harness import Checker, Server, count_extra_loop_fds, get, LOCALHOST  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATUS_SCRIPT = os.path.join(HERE, "proxy_status.lua")
@@ -113,7 +113,7 @@ async def scenario_cap(base, cap, extra_count, free_count):
     check("상한 %d개 연결이 모두 성립 (실패 %d)" % (cap, errors), len(held) == cap and errors == 0)
 
     peak = server.fd_count()
-    check("서버 fd가 상한에 닿음 (%d ≤ fd %d ≤ %d)" % (cap, peak, cap + 30), cap <= peak <= cap + 30)
+    check("서버 fd가 상한에 닿음 (%d ≤ fd %d ≤ %d)" % (cap, peak, cap + 30 + count_extra_loop_fds()), cap <= peak <= cap + 30 + count_extra_loop_fds())
 
     extras = []
     for _ in range(extra_count):
@@ -127,8 +127,8 @@ async def scenario_cap(base, cap, extra_count, free_count):
     peak_after = server.fd_count()
     check("상한이 찬 동안 넘치는 연결 %d개(대기열에 들어간 것)는 처리되지 않음 (처리됨 %d)"
           % (len(connected), served_while_full), served_while_full == 0)
-    check("넘치는 연결을 시도한 뒤에도 서버 fd가 상한 이하 (fd %d ≤ %d)" % (peak_after, cap + 30),
-          peak_after <= cap + 30)
+    check("넘치는 연결을 시도한 뒤에도 서버 fd가 상한 이하 (fd %d ≤ %d)" % (peak_after, cap + 30 + count_extra_loop_fds()),
+          peak_after <= cap + 30 + count_extra_loop_fds())
 
     for reader, writer in held[:free_count]:
         writer.close()

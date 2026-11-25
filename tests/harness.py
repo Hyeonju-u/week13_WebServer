@@ -15,6 +15,20 @@ BINARY = os.environ.get("WEBSERVER_BINARY", os.path.join(ROOT, "build", "webserv
 BACKEND_B = os.path.join(ROOT, "tests", "backend_b.py")
 LOCALHOST = "127.0.0.1"
 IS_LINUX = sys.platform.startswith("linux")
+# 루프 하나마다 고정 fd를 이만큼으로 잡는다: listen, epoll, 루트, 경로를 따라갈 때 잠깐 쓰는 fd (M9, M10)
+FDS_PER_LOOP = 4
+
+
+def count_default_loops():
+    """서버의 기본 루프 수와 같은 방법으로 센다: macOS는 1, 그 밖은 온라인 코어 수 (M2)."""
+    if sys.platform == "darwin":
+        return 1
+    return min(max(os.cpu_count() or 1, 1), 256)
+
+
+def count_extra_loop_fds(loops=None):
+    """루프가 하나일 때보다 늘어나는 고정 fd 수. 기존 fd 절대 기준에 더한다 (M9)."""
+    return FDS_PER_LOOP * ((loops or count_default_loops()) - 1)
 
 
 def count_fds_linux(pid):

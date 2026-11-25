@@ -11,7 +11,6 @@
 
 typedef struct {
     int listen_fd;
-    int reserve_fd;
     int root_fd;
     size_t root_path_length;
     event_loop_t * loop;
@@ -26,6 +25,8 @@ typedef struct {
     size_t pending_count;
     conn_t * closed_head;
     int is_accepting;
+    /* fd가 모자라 물러났을 때 이 시각 전에는 다시 받지 않는다 (M10) */
+    long long accept_retry_ms;
     int is_shutting_down;
     long long shutdown_deadline_ms;
     long long now_ms;
@@ -36,11 +37,15 @@ typedef struct {
     const char * root_path;
     size_t max_connections;
     proxy_config_t * proxy_config;
+    /* 빌려 쓴다. 모든 루프가 같은 것을 받고, 만든 쪽(main)이 정리한다 (M5) */
+    upstream_t * upstream;
 } server_options_t;
 
 server_t * create_server (const server_options_t * options);
 int run_server (server_t * server);
 void destroy_server (server_t * server);
+void raise_fd_limit (size_t max_connections, size_t loop_count);
+size_t compute_connection_limit (size_t max_connections, size_t loop_count);
 
 /* 아래는 proxy.c가 함께 쓰는 연결 관리 동작이다 */
 int register_connection (server_t * server, conn_t * conn);

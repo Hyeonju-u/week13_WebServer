@@ -1,9 +1,12 @@
 #include "signals.h"
 
 #include <signal.h>
+#include <stdatomic.h>
 #include <string.h>
 
-static volatile sig_atomic_t shutdown_flag = 0;
+/* 루프 스레드 여러 개가 같이 읽으므로 원자 변수로 둔다. 잠금 없는 int라
+ * 핸들러 안에서 써도 안전하다 (M6) */
+static atomic_int shutdown_flag = 0;
 
 static void handle_shutdown_signal (int signal_number);
 
@@ -29,7 +32,13 @@ int install_signal_handlers (void) {
 }
 
 int is_shutdown_requested (void) {
-    return shutdown_flag != 0;
+    return atomic_load(&shutdown_flag) != 0;
+}
+
+/* 루프 하나가 멈추거나 스레드를 못 만들면 나머지 루프도 같은 종료 절차를
+ * 밟게 한다 (M6) */
+void request_shutdown (void) {
+    atomic_store(&shutdown_flag, 1);
 }
 
 /* ── 도우미 함수 ── */
@@ -37,5 +46,5 @@ int is_shutdown_requested (void) {
 /* 핸들러 안에서는 플래그 하나만 바꾼다. close·free·printf는 안전하지 않다 */
 static void handle_shutdown_signal (int signal_number) {
     (void) signal_number;
-    shutdown_flag = 1;
+    atomic_store(&shutdown_flag, 1);
 }

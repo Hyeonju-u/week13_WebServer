@@ -1,9 +1,16 @@
+/* SO_REUSEPORT는 POSIX가 아니라서 glibc는 _DEFAULT_SOURCE일 때만 보여 준다.
+ * 다른 파일의 기능 매크로는 그대로 두려고 이 파일에서만 켠다 (M1) */
+#ifdef __linux__
+#define _DEFAULT_SOURCE
+#endif
+
 #include "server.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <netinet/in.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,14 +29,19 @@
 
 #define EVENT_BATCH 1024
 #define WAIT_MAX_MS 1000
-#define RESERVE_PATH "/dev/null"
+/* 최대 연결 수를 fd 한도에 맞출 때 빼 두는 fd (M10). 프로세스는 표준 입출력,
+ * 루프마다 listen, epoll, 루트, 경로를 따라갈 때 잠깐 쓰는 fd 하나 */
+#define PROCESS_FIXED_FDS 3
+#define LOOP_FIXED_FDS 4
 #define DISCARD_CHUNK_BYTES 4096
 #define DISCARD_ROUNDS_MAX 256
+
+/* 최대 연결 수는 루프마다가 아니라 서버 전체 합계다. 모든 루프가 같이 센다 (M4) */
+static atomic_size_t total_connections = 0;
 
 static int prepare_server (server_t * server,
     const server_options_t * options);
 static int open_root_directory (server_t * server, const char * root_path);
-static void raise_fd_limit (size_t max_connections);
 static void apply_fd_limit (struct rlimit * limit, rlim_t wanted);
 static int create_listen_socket (int port);
 static void begin_shutdown (server_t * server);
@@ -58,10 +70,12 @@ static char * create_location_header (const char * uri, size_t path_length,
     size_t uri_length);
 static void dispatch_event (server_t * server, const event_t * event);
 static void accept_connections (server_t * server);
+static int take_connection_slot (const server_t * server);
 static void pause_accepting (server_t * server);
 static int accept_one_connection (server_t * server);
+static void give_back_connection_slot (void);
 static int handle_accept_failure (server_t * server);
-static void discard_waiting_connection (server_t * server);
+static void back_off_accepting (server_t * server);
 static void register_client (server_t * server, int fd,
     const struct sockaddr_storage * address);
 static void remember_client_address (conn_t * conn,
@@ -81,6 +95,7 @@ static void handle_write_error (server_t * server, conn_t * conn);
 static void expire_timers (server_t * server);
 static void handle_timeout (server_t * server, conn_t * conn);
 static void resume_accepting (server_t * server);
+static int is_server_full (const server_t * server);
 static void free_closed_connections (server_t * server);
 static void link_connection (server_t * server, conn_t * conn);
 static void close_peer (server_t * server, conn_t * conn);
@@ -99,13 +114,13 @@ server_t * create_server (const server_options_t * options) {
         return NULL;
     }
     server->listen_fd = -1;
-    server->reserve_fd = -1;
     server->root_fd = -1;
     server->proxy_config = options->proxy_config;
     server->max_connections = options->max_connections;
     server->now_ms = get_now_ms();
-    server->upstream = create_upstream(options->proxy_config);
-    if (server->upstream == NULL || prepare_server(server, options) != 0) {
+    /* 분배 차례와 빠진 시각은 모든 루프가 같이 쓰는 하나를 빌려 쓴다 (M5) */
+    server->upstream = options->upstream;
+    if (prepare_server(server, options) != 0) {
         destroy_server(server);
         return NULL;
     }
@@ -151,9 +166,6 @@ void destroy_server (server_t * server) {
     if (server->listen_fd >= 0) {
         close(server->listen_fd);
     }
-    if (server->reserve_fd >= 0) {
-        close(server->reserve_fd);
-    }
     if (server->root_fd >= 0) {
         close(server->root_fd);
     }
@@ -163,8 +175,51 @@ void destroy_server (server_t * server) {
     if (server->heap != NULL) {
         destroy_timer_heap(server->heap);
     }
-    destroy_upstream(server->upstream);
     free(server);
+}
+
+/*
+ * 손님 소켓 말고도 파일 fd, 백엔드 소켓이 필요해서 최대 연결 수의
+ * 두 배를 목표로 삼는다. macOS 기본 한도(256)로는 1만 연결을 받을 수 없다.
+ * 한도는 프로세스 전체에 하나라서 루프를 만들기 전에 한 번, 전체 기준으로
+ * 올린다. 고정 fd 여유분은 루프마다 잡는다 (M4).
+ */
+void raise_fd_limit (size_t max_connections, size_t loop_count) {
+    struct rlimit limit;
+    //getrlimit:열수있는 파일(fd)개수를 limit 그릇에 담아줘 반환값 0 성공 -1 실패  
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
+        return;
+    }
+    /*연결 1개당 fd2개,(손님소켓+백엔드 소켓 또는 보내는 중인파일)
+    +64 = 리슨소켓,kqueue/epoll,루트 fd 같은 고정 fd 여유분 (루프마다, M4) */
+    rlim_t wanted = (rlim_t) max_connections * 2 + 64 * (rlim_t) loop_count;
+    //지금한도 (soft)가 목표보다 낮을때만 올림(이미 충분하면 건드리지않음)
+    if (limit.rlim_cur < wanted) {
+        apply_fd_limit(&limit, wanted);//안에서 Hard 한도를 넘지 않게 조정후 setrlimit 할 것
+    }
+}
+
+/*
+ * fd가 바닥나지 않도록 최대 연결 수를 지금 fd 한도에 맞춘다 (M10).
+ * 연결 하나는 손님 소켓 + 파일 또는 백엔드 소켓으로 fd를 최대 2개 쓴다.
+ * 설정값보다 크게 늘리지는 않는다. 0이면 한 명도 받을 수 없다.
+ */
+size_t compute_connection_limit (size_t max_connections, size_t loop_count) {
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
+        return max_connections;
+    }
+    rlim_t fixed = PROCESS_FIXED_FDS + LOOP_FIXED_FDS * (rlim_t) loop_count;
+    rlim_t usable = limit.rlim_cur > fixed ? (limit.rlim_cur - fixed) / 2 : 0;
+    size_t allowed = usable < (rlim_t) max_connections
+        ? (size_t) usable : max_connections;
+    write_log(LOG_INFO, "fd 한도 %llu, 최대 연결 수 %zu",
+        (unsigned long long) limit.rlim_cur, allowed);
+    if (allowed < max_connections) {
+        write_log(LOG_INFO, "fd 한도에 맞춰 최대 연결 수를 %zu에서 %zu로 줄임",
+            max_connections, allowed);
+    }
+    return allowed;
 }
 
 /* 실패하면 conn은 등록되지 않은 채 남으므로 호출자가 destroy한다 */
@@ -201,6 +256,7 @@ void close_connection (server_t * server, conn_t * conn) {
     unlink_pending(server, conn);
     if (conn->kind == CONN_CLIENT) {
         server->connection_count--;
+        give_back_connection_slot();
     }
     release_buffer(&conn->input);
     release_buffer(&conn->output);
@@ -304,7 +360,6 @@ static int prepare_server (server_t * server,
     if (open_root_directory(server, options->root_path) != 0) {
         return -1;
     }
-    raise_fd_limit(options->max_connections);
     server->loop = create_event_loop();
     server->heap = create_timer_heap();
     if (server->loop == NULL || server->heap == NULL) {
@@ -312,11 +367,6 @@ static int prepare_server (server_t * server,
     }
     server->listen_fd = create_listen_socket(options->port);
     if (server->listen_fd < 0) {
-        return -1;
-    }
-    server->reserve_fd = open(RESERVE_PATH, O_RDONLY);
-    if (server->reserve_fd < 0) {
-        write_log(LOG_ERROR, "비상용 fd를 열 수 없음: %s", strerror(errno));
         return -1;
     }
     if (add_event(server->loop, server->listen_fd, server, 1, 0) != 0) {
@@ -346,32 +396,6 @@ static int open_root_directory (server_t * server, const char * root_path) {
     return 0;
 }
 
-/*
- * 손님 소켓 말고도 파일 fd, 백엔드 소켓, 비상용 fd가 필요해서 최대 연결 수의
- * 두 배를 목표로 삼는다. macOS 기본 한도(256)로는 1만 연결을 받을 수 없다.
- */
-static void raise_fd_limit (size_t max_connections) {
-    struct rlimit limit;
-    //getrlimit:열수있는 파일(fd)개수를 limit 그릇에 담아줘 반환값 0 성공 -1 실패  
-    if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
-        return;
-    }
-    /*연결 1개당 fd2개,(손님소켓+백엔드 소켓 또는 보내는 중인파일)
-    +64 = 리슨소켓,kqueue/epoll,루트 fd,비상용 fd,같은 고정 fd 여유분 */
-    rlim_t wanted = (rlim_t) max_connections * 2 + 64;
-    //지금한도 (soft)가 목표보다 낮을때만 올림(이미 충분하면 건드리지않음)
-    if (limit.rlim_cur < wanted) {
-        apply_fd_limit(&limit, wanted);//안에서 Hard 한도를 넘지 않게 조정후 setrlimit 할 것
-    }
-    getrlimit(RLIMIT_NOFILE, &limit);
-    write_log(LOG_INFO, "fd 한도 %llu, 최대 연결 수 %zu",
-        (unsigned long long) limit.rlim_cur, max_connections);
-    if (limit.rlim_cur < wanted) {
-        write_log(LOG_INFO, "fd 한도가 목표 %llu보다 낮아 연결이 몰리면 "
-            "파일을 열지 못해 500이 나갈 수 있음", (unsigned long long) wanted);
-    }
-}
-
 /* 목표가 거절되면 macOS의 OPEN_MAX(10240)까지만이라도 올려 본다 */
 static void apply_fd_limit (struct rlimit * limit, rlim_t wanted) {
     rlim_t fallback = 10240;
@@ -396,8 +420,14 @@ static int create_listen_socket (int port) {
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_ANY);
     address.sin_port = htons((unsigned short) port);
-    /* 재시작할 때 이전 연결의 TIME_WAIT에 막히지 않도록 bind 전에 설정한다 */
+    /*
+     * 재시작할 때 이전 연결의 TIME_WAIT에 막히지 않도록 bind 전에 설정한다.
+     * SO_REUSEPORT는 루프마다 같은 포트로 listen해서 커널이 연결을 나누게
+     * 한다 (M1)
+     */
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enabled,
+            sizeof(enabled)) != 0
+        || setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &enabled,
             sizeof(enabled)) != 0
         || bind(fd, (struct sockaddr *) &address, sizeof(address)) != 0
         || listen(fd, SOMAXCONN) != 0 || set_nonblocking(fd) != 0) {
@@ -702,7 +732,7 @@ static void accept_connections (server_t * server) {
     //한라운드에 최대 64명(ACCEPT_BATCH_MAX) 까지만 받음
     for (int i = 0; i < ACCEPT_BATCH_MAX; i++) {
         //지금 연결수가 상한 1만에 도달했으면 
-        if (server->connection_count >= server->max_connections) {
+        if (!take_connection_slot(server)) {
             // 리슨 소켓 알림끔->새 손님왔다고 더는 알림 안옴
             pause_accepting(server);//받기 중단
             return;
@@ -712,6 +742,20 @@ static void accept_connections (server_t * server) {
             return;
         }
     }
+}
+
+/*
+ * 다른 루프와 동시에 받아도 전체 합계가 상한을 넘지 않도록 먼저 더해 자리를
+ * 잡고, 넘었으면 되돌린다 (M4, M3과 같은 방식). 1이면 한 명을 받을 자리가 있다.
+ * 잡은 자리는 accept_one_connection이 손님을 못 받으면 돌려준다.
+ */
+static int take_connection_slot (const server_t * server) {
+    size_t before = atomic_fetch_add(&total_connections, 1);
+    if (before >= server->max_connections) {
+        atomic_fetch_sub(&total_connections, 1);
+        return 0;
+    }
+    return 1;
 }
 
 /* 상한에 닿으면 listen을 감시 목록에서 빼서 새 손님을 커널 줄에 둔다 */
@@ -724,17 +768,26 @@ static void pause_accepting (server_t * server) {
     write_log(LOG_INFO, "최대 연결 수에 도달: accept 중지");
 }
 
-/* 계속 받아도 되면 1, 이번 바퀴의 accept를 멈춰야 하면 0 */
+/*
+ * 계속 받아도 되면 1, 이번 바퀴의 accept를 멈춰야 하면 0.
+ * take_connection_slot으로 잡은 자리를 넘겨받는다. 손님을 못 받으면 돌려준다 (M4)
+ */
 static int accept_one_connection (server_t * server) {
     struct sockaddr_storage address;
     socklen_t address_length = sizeof(address);
     int fd = accept(server->listen_fd, (struct sockaddr *) &address,
         &address_length);
     if (fd < 0) {
-        return handle_accept_failure(server);
+        int result = handle_accept_failure(server);
+        give_back_connection_slot();
+        return result;
     }
     register_client(server, fd, &address);
     return 1;
+}
+
+static void give_back_connection_slot (void) {
+    atomic_fetch_sub(&total_connections, 1);
 }
  
 static int handle_accept_failure (server_t * server) {
@@ -744,9 +797,9 @@ static int handle_accept_failure (server_t * server) {
     if (error_number == EAGAIN || error_number == EWOULDBLOCK) {
         return 0;
     }
-    //fd가 바닥남 EMFILE= 우리 프로세스 한도 꽉참 /ENFILE 컴퓨터 전체 한도 꽉참 비상용 fd 트릭으로 맨 줄 앞 손님 받자마자 끊음
+    //fd가 바닥남 EMFILE= 우리 프로세스 한도 꽉참 /ENFILE 컴퓨터 전체 한도 꽉참
     if (error_number == EMFILE || error_number == ENFILE) {
-        discard_waiting_connection(server);//비상용 fd 내용은 이 함수안에 있음
+        back_off_accepting(server);
         return 0;
     }
     write_log(LOG_DEBUG, "accept 실패: %s", strerror(error_number));
@@ -756,20 +809,24 @@ static int handle_accept_failure (server_t * server) {
 
 /*
  * fd가 바닥나면 줄 서 있는 손님 때문에 listen이 계속 "준비됨"으로 떠서
- * 루프가 CPU 100%로 돈다. 비상용 fd를 닫아 그 자리에서 받아 버린 뒤
- * 다시 확보한다 (CON-11).
+ * 루프가 CPU 100%로 돈다 (CON-11). 예전에는 비상용 fd를 닫아 그 자리로 받아
+ * 끊었지만, 루프가 여럿이면 닫는 순간 다른 루프가 그 번호를 가져간다.
+ * 그래서 이 루프만 listen 감시를 끄고 WAIT_MAX_MS 뒤에 다시 받는다.
+ * 대기 손님은 끊지 않고 커널 줄에 남는다 (M10)
  */
-static void discard_waiting_connection (server_t * server) {
-    close(server->reserve_fd);
-    int fd = accept(server->listen_fd, NULL, NULL);
-    if (fd >= 0) {
-        close(fd);
+static void back_off_accepting (server_t * server) {
+    if (server->is_accepting) {
+        delete_event(server->loop, server->listen_fd);
+        server->is_accepting = 0;
     }
-    server->reserve_fd = open(RESERVE_PATH, O_RDONLY);
-    write_log(LOG_INFO, "fd 한도에 도달해 대기 중인 손님을 거절함");
+    server->accept_retry_ms = server->now_ms + WAIT_MAX_MS;
+    write_log(LOG_INFO, "fd가 모자라 %d ms 뒤에 다시 받음", WAIT_MAX_MS);
 }
 
-/* fd의 주인은 성공하면 conn이고, 실패하면 이 함수가 닫는다 */
+/*
+ * fd의 주인은 성공하면 conn이고, 실패하면 이 함수가 닫는다. 연결 자리도
+ * 성공하면 conn이 갖고(close_connection이 돌려줌), 실패하면 여기서 돌려준다 (M4)
+ */
 static void register_client (server_t * server, int fd,
     const struct sockaddr_storage * address) {
     conn_t * conn = NULL;
@@ -778,6 +835,7 @@ static void register_client (server_t * server, int fd,
     }
     if (conn == NULL) {
         close(fd);
+        give_back_connection_slot();
         return;
     }
     remember_client_address(conn, address);
@@ -785,6 +843,7 @@ static void register_client (server_t * server, int fd,
     conn->wants_read = 1;
     if (register_connection(server, conn) != 0) {
         destroy_connection(conn);
+        give_back_connection_slot();
         return;
     }
     server->connection_count++;
@@ -975,9 +1034,13 @@ static void handle_timeout (server_t * server, conn_t * conn) {
     close_connection(server, conn);
 }
 
+/*
+ * 다른 루프에서 연결이 닫혀 자리가 나도 이 루프는 알림을 받지 못한다. 매 바퀴
+ * (최대 WAIT_MAX_MS마다) 전체 합계를 보고 다시 받는다 (M4)
+ */
 static void resume_accepting (server_t * server) {
     if (server->is_accepting || server->is_shutting_down
-        || server->connection_count >= server->max_connections) {
+        || is_server_full(server) || server->now_ms < server->accept_retry_ms) {
         return;
     }
     if (add_event(server->loop, server->listen_fd, server, 1, 0) != 0) {//0이 아니다 등록실패 이미 받는 중이면 아무것도 안 함
@@ -985,6 +1048,10 @@ static void resume_accepting (server_t * server) {
         return;
     }
     server->is_accepting = 1;//지금 손님 받는중 깃발세움
+}
+
+static int is_server_full (const server_t * server) {
+    return atomic_load(&total_connections) >= server->max_connections;
 }
 
 static void free_closed_connections (server_t * server) {
