@@ -23,7 +23,7 @@ typedef struct {
     const char * cause;
     /* (G18) stderr에 찍는 설명 */
     const char * what;
-    /* (G13, C4) connect 실패·타임아웃·도중 끊김만 뺀다 */
+    /* (G13, G41) connect 실패·타임아웃·도중 끊김만 뺀다 */
     bool should_mark;
 } backend_failure_t;
 
@@ -171,7 +171,7 @@ void expire_backend (loop_t * loop, conn_t ** slot) {
     }
 }
 
-/* (G14, G26) close가 epoll에서도 뺀다. 넘겨준 응답 버퍼는 이미 NULL (G46) */
+/* (G14, G26) close가 epoll에서도 뺀다. 넘겨준 응답 버퍼는 이미 NULL (G47) */
 void release_backend (loop_t * loop, conn_t * conn) {
     proxy_t * proxy = &conn->proxy;
 
@@ -503,7 +503,7 @@ static void finish_at_close (loop_t * loop, conn_t ** slot) {
     finish_backend_response(loop, slot);
 }
 
-/* (G8, G10, G39, G46) 응답 헤더를 고치고, 응답 버퍼를 손님 응답 본문으로
+/* (G8, G10, G39, G47) 응답 헤더를 고치고, 응답 버퍼를 손님 응답 본문으로
  * 넘긴 뒤 백엔드를 놓는다 (넘는 바이트는 Content-Length로 잘림).
  * 성공한 줄에는 앞 시도의 실패 원인을 남기지 않는다 (retry=N만) */
 static void finish_backend_response (loop_t * loop, conn_t ** slot) {

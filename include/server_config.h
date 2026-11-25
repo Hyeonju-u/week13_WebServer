@@ -32,7 +32,7 @@ typedef struct {
     /* 소유. copy_static_root 결과 */
     char * root;
     bool access_log;
-    /* (L36, G41) 테스트 전용: 카드 수·처리 중 수를 stderr에 */
+    /* (L36, G42) 테스트 전용: 카드 수·처리 중 수를 stderr에 */
     bool count_log;
     long long header_timeout_ms;
     long long body_timeout_ms;

@@ -74,11 +74,15 @@ Claude Code 질문 목록(A·B·C)에 대한 답. 괄호는 질문 번호.
 | G36 | 재시도 중 실패가 섞이면 마지막 실패로 응답 코드를 정함. `socket()` 자체 실패는 500, 빼기·재시도 없음 (C5, C6) | nginx와 같음. `socket()` 실패는 백엔드 탓이 아니라 우리 쪽 자원 문제 | — | G12 |
 | G37 | 경로에 `%2F`가 있으면 라우팅 전에 404 (C7) | 2단계와 일관 | API 경로에도 `%2F`를 못 씀 → README 한계 | G3 |
 | G38 | 502·504는 2단계 `write_response_head`에 코드 두 개 추가. `Expect`는 `100-continue`일 때만 100을 보내고, 본문 일부가 이미 와 있어도 보냄 (C8, C9) | 응답 만들기 한 곳. 손님은 100을 받으면 나머지를 보냄 | — | G7, G12 |
-| G39 | 프록시 로그: `-> IP:포트 retry=N (backend Nms) 원인`, 원인은 `refused`/`timeout`/`reset`/`invalid`/`chunked`/`too_large` (C10) | G18 구체화 | — | G18 |
+| G39 | 프록시 로그: `-> IP:포트 retry=N (backend Nms) 원인`, 원인은 `refused`/`timeout`/`reset`/`invalid`/`chunked`/`too_large` (C10). 재시도 뒤 성공한 줄에는 원인을 쓰지 않고 `retry=N`만 (2026-11-25 구현 후 결정) | G18 구체화. 200 줄에 `refused`가 붙으면 실패한 요청처럼 읽힘 | 앞 시도가 왜 실패했는지는 stderr에서 봄 | G18 |
 | G40 | 설정 세부: `route /` 허용, 한 규칙 안에 같은 백엔드 두 번이면 오류, K=1024, 켬/끔은 `on`/`off`, root 경로에 공백 불가. 메모리에 든 응답은 L30처럼 한 번에 8KB씩 씀 (C11, C12) | 단순한 `key value` 형식 유지 | 공백 있는 경로는 못 씀 | G15 |
 | G41 | "10초 빼기"(G13) 대상 실패는 connect 거절·타임아웃, 읽기·쓰기 타임아웃, 응답 도중 끊김(RST). 상태 줄 깨짐·chunked·상한 초과는 빼지 않음 (C4) | 빼기는 "서버가 아프다"는 판단. 형식 문제는 그 주소 하나의 문제라 서버 전체를 빼면 정상 요청까지 손해. nginx 기본(`proxy_next_upstream error timeout`)과 같은 선 | 원래 느린 주소 하나의 타임아웃으로도 서버 전체가 10초 빠짐 (nginx도 같음) → README | G13 |
-
-남은 질문: B7·B9(목록에 없음, Claude Code에 확인).
+| G42 | 테스트 전용 설정 `count_log on` 하나 (L36 `--count-log`가 옮겨 옴). 켜면 `cards created=N destroyed=M`에 더해, 처리 중 수가 바뀔 때마다 stderr에 `backend IP:포트 active=N` 한 줄 (B7) | LB-8·CL-1이 처리 중 수 0을 확인해야 함. 3단계 정규식은 새 줄을 건너뜀 | 끄면 비용 없음 | G14, L19 |
+| G43 | Makefile: `make test`·`make asan`에 `test_server_config`·`test_router` 추가. `make itest`·`itest-asan`은 `tests/test_proxy.py`를 돌리고, 이 스크립트가 CL-6으로 3단계 테스트까지 돌림. 테스트 ID를 뒤에 주면 그것만 돌림 (B9) | 실행 파일 하나 = 테스트 파일 하나 (S30). 고치는 중엔 실패한 것만 다시 돌림 | `test_router`만 `-Wno-unused-function` (RT가 `CHECK_VIEW`를 안 씀, tests/는 안 고침) | B13, L40 |
+| G44 | 204·304 응답에는 `Content-Length`를 붙이지 않음 (G10의 예외, 구현 중 빈칸 1) | RFC 9110 §8.6: 204에 Content-Length MUST NOT. 본문이 없는 응답 | — | G10 |
+| G45 | G28의 431 뒤에는 연결을 닫음 (구현 중 빈칸 2) | 파서가 내는 431과 같게 B31을 따름 | — | G28 |
+| G46 | 설정 파일에서 줄 어디에 있든 `#` 뒤는 주석 (`listen 8080 # 주석`) (구현 중 빈칸 3) | nginx와 같음 | 값에 `#`을 쓸 수 없음 | G15 |
+| G47 | 완성된 백엔드 응답 버퍼는 손님 응답 본문으로 넘어가고, 손님 응답 쪽(`release_response`)이 다 보낸 뒤 푼다. 넘기기 전(재시도·실패·손님이 떠남)에는 `release_backend`만 푼다 (G26 보완) | G8은 백엔드를 닫은 **뒤에** 손님에게 보냄. G26 문구 그대로면 보낼 본문이 먼저 사라짐. 정적 파일 fd와 같은 자리 | 버퍼를 푸는 곳이 시점에 따라 둘 (어느 순간이든 주인은 하나) | G26, G27 |
 
 ## 4. 설정 파일 항목 (G15)
 
@@ -110,7 +114,7 @@ max_body 1M
 
 ## 5. 구현 쪽(Claude Code)에 넘길 질문
 
-→ 2026-11-25 답함: 3-1 표 G21~G40.
+→ 2026-11-25 답함: 3-1 표 G21~G41. 구현 중 정한 것은 G42~G47.
 
 - 진행 카드의 새 상태(본문 받기 → 백엔드 연결 중 → 요청 보내는 중 → 응답 받는 중)와 전환표, 카드에 붙일 백엔드 쪽 필드
 - 백엔드 응답 버퍼를 늘리는 방식 (두 배 `realloc` / 조각 목록), 상한과의 관계

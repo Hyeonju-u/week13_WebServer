@@ -43,7 +43,7 @@ backend_head_result parse_backend_head (const char * data, size_t length,
                                         size_t max_body,
                                         backend_head_t * head);
 
-/* (G10, G35, G43) 손님에게 보낼 응답 헤더를 buffer에 쓴다.
+/* (G10, G35, G44) 손님에게 보낼 응답 헤더를 buffer에 쓴다.
  * HTTP/1.1 + 상태·사유 그대로, hop-by-hop·Content-Length를 빼고 나머지는
  * 그대로, 본문이 있으면 받은 길이로 Content-Length, Connection은 손님 기준.
  * buffer: MAX_RESPONSE_HEAD_SIZE (백엔드 헤더 8,192 + 붙이는 줄 62바이트).

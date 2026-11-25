@@ -45,11 +45,11 @@ const struct sockaddr_in * find_backend_address (const upstream_t * upstream,
                                                  const route_t * route,
                                                  size_t position);
 
-/* (G14) 처리 중 +1 (count_log면 stderr에 한 줄, G41) */
+/* (G14) 처리 중 +1 (count_log면 stderr에 한 줄, G42) */
 void add_backend_use (upstream_t * upstream, const route_t * route,
                       size_t position);
 
-/* (G14, G26) 처리 중 −1 (count_log면 stderr에 한 줄, G41) */
+/* (G14, G26) 처리 중 −1 (count_log면 stderr에 한 줄, G42) */
 void remove_backend_use (upstream_t * upstream, const route_t * route,
                          size_t position);
 

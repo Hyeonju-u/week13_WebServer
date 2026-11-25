@@ -210,7 +210,7 @@ void respond_with_proxy_status (loop_t * loop, conn_t ** slot, int status) {
     start_response(loop, slot, &head);
 }
 
-/* (G10, G34, G40, G46) */
+/* (G10, G34, G40, G47) */
 void start_proxy_response (loop_t * loop, conn_t ** slot, size_t head_length,
                            char * body, size_t body_start,
                            size_t body_length, int status) {
@@ -299,7 +299,7 @@ static void process_buffered_request (loop_t * loop, conn_t ** slot) {
     start_request(loop, slot, header_length);
 }
 
-/* (B31, L6, L12, G44) 오류 응답 뒤에는 항상 lingering으로 닫는다 */
+/* (B31, L6, L12, G45) 오류 응답 뒤에는 항상 lingering으로 닫는다 */
 static void respond_with_error (loop_t * loop, conn_t ** slot, int status) {
     response_head_t head = { .status = status, .keep_alive = false };
 
@@ -400,7 +400,7 @@ static void start_request (loop_t * loop, conn_t ** slot,
     start_static_request(loop, slot);
 }
 
-/* (R2a, G7, G28, G33, G44) 요청 헤더를 미리 고치고 → 본문을 모으기 시작 →
+/* (R2a, G7, G28, G33, G45) 요청 헤더를 미리 고치고 → 본문을 모으기 시작 →
  * Expect면 100 Continue. 431·500은 닫는다 */
 static void start_proxy_request (loop_t * loop, conn_t ** slot,
                                  const route_t * route) {
@@ -626,7 +626,7 @@ static void add_backend_entry (const loop_t * loop, const conn_t * conn,
     entry->backend_cause = proxy->cause;
 }
 
-/* (L32, S11, G46) 두 번 불러도 안전 */
+/* (L32, S11, G47) 두 번 불러도 안전 */
 static void release_response (conn_t * conn) {
     free(conn->response_head);
     conn->response_head = NULL;

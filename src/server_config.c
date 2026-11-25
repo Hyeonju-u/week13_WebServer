@@ -320,7 +320,7 @@ static bool parse_config_line (config_parser_t * parser, char * line) {
     return true;
 }
 
-/* (G15, G45) 줄 어디에 있든 '#' 뒤는 주석 */
+/* (G15, G46) 줄 어디에 있든 '#' 뒤는 주석 */
 static void cut_comment (char * line) {
     char * mark = strchr(line, '#');
 

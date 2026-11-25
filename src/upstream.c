@@ -162,7 +162,7 @@ static bool is_better (upstream_t * upstream, const route_t * route,
            < find_state(upstream, route, best)->active;
 }
 
-/* (G41, L36) "backend 127.0.0.1:8001 active=N" */
+/* (G42, L36) "backend 127.0.0.1:8001 active=N" */
 static void report_active (const upstream_t * upstream,
                            const route_t * route, size_t position) {
     char address[INET_ADDRSTRLEN];

@@ -1,7 +1,7 @@
 # (B13) make test: 일반 빌드 / make asan: ASan·LSan 빌드 (Q5)
 # (S30) 단위 테스트 실행 파일을 차례로 돌리고, 실패하면 멈춘다
 # (L40) make server / server-asan: 서버, make itest / itest-asan: 통합 테스트
-# (G42) 4단계: CF·RT 단위 테스트 추가, 통합 테스트는 test_proxy.py가
+# (G43) 4단계: CF·RT 단위 테스트 추가, 통합 테스트는 test_proxy.py가
 #       CL-6으로 3단계 테스트까지 돌린다
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g -D_XOPEN_SOURCE=700 -Iinclude

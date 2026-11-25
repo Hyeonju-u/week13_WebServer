@@ -75,7 +75,7 @@ backend_head_result parse_backend_head (const char * data, size_t length,
     return parse_backend_headers(data, max_body, head);
 }
 
-/* (G10, G35, G43) 붙이는 줄은 Content-Length 최대 38 + Connection 24 바이트라
+/* (G10, G35, G44) 붙이는 줄은 Content-Length 최대 38 + Connection 24 바이트라
  * MAX_RESPONSE_HEAD_SIZE 여유(512) 안에 든다. 넘침 처리는 두지 않는다 (S27) */
 size_t write_client_head (const char * data, const backend_head_t * head,
                           size_t body_length, bool keep_alive,

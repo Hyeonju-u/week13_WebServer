@@ -102,7 +102,7 @@ typedef struct conn {
     char * response_head;
     size_t response_head_length;
     size_t response_head_sent;
-    /* (G40, G46) 소유. 메모리 본문 (백엔드 응답 버퍼를 넘겨받음). NULL = 파일 */
+    /* (G40, G47) 소유. 메모리 본문 (백엔드 응답 버퍼를 넘겨받음). NULL = 파일 */
     char * response_body;
     size_t response_body_start;
     /* (L9, L16, G40) 약속한 본문 길이와 보낸 위치 (파일 또는 메모리) */
@@ -144,7 +144,7 @@ void free_closed_conns (loop_t * loop);
  * 500은 닫고(L10), 나머지는 요청의 keep-alive를 따른다 */
 void respond_with_proxy_status (loop_t * loop, conn_t ** slot, int status);
 
-/* (G10, G40, G46) loop->head에 쓴 head_length바이트 헤더와 메모리 본문을 보낸다.
+/* (G10, G40, G47) loop->head에 쓴 head_length바이트 헤더와 메모리 본문을 보낸다.
  * body: 넘겨받는다 (다 보내거나 정리할 때 free). 본문은 body + body_start부터.
  * 연결 유지는 요청의 keep-alive를 따른다 (G34) */
 void start_proxy_response (loop_t * loop, conn_t ** slot, size_t head_length,
