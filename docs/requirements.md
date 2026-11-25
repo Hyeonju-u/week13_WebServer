@@ -15,6 +15,8 @@
 | P | 파서 세부 결정 (`docs/step1-parser.md`) |
 | S | 정적 응답 세부 결정 (`docs/step2-static.md`) |
 | L | 이벤트 루프 세부 결정 (`docs/step3-loop.md`) |
+| G | 프록시·설정 파일 세부 결정 (`docs/step4-proxy.md`) |
+| E | 정상 종료 세부 결정 (`docs/step6-shutdown.md`) |
 
 ## 1. 요구사항 흐름
 
@@ -103,7 +105,7 @@
 | D7 | keep-alive 지원 |
 | D8 | 백엔드 응답은 다 받고 한 번에 전달 + 응답 크기 상한 |
 | D9 | 시그널은 전용 스레드가 `sigwait`. 스레드 생성 전에 `pthread_sigmask`로 막기 |
-| D10 | 설정 파일 |
+| D10 | 설정 파일 (4단계 G15에서 만듦) |
 
 ## 5. 정해진 세부 결정 (B)
 
@@ -128,9 +130,21 @@
 | B12 | 정적 POST는 405 + `Allow: GET` (S8) |
 | B14 | epoll은 level-triggered (L3) |
 | B15 | 손님 쪽 타임아웃: 헤더 전체 60초 / 본문 사이 60초 / 쓰기 사이 60초 / keep-alive idle 75초 (L5, L6) |
-| B16 | 최대 연결 수 = fd 소프트 한도 − 여유분, 넘으면 listen을 잠깐 뺌 (L8) |
+| B16 | 최대 연결 수 = fd 소프트 한도 − 여유분, 넘으면 listen을 잠깐 뺌 (L8). 4단계에서 ÷ 2 (G19) |
+| B17 | 라우팅은 경로 기반 (G1) |
+| B18 | 경로 조각 경계 접두사, 먼저 적힌 규칙 우선, 안 맞으면 정적 (G2) |
+| B19 | 경로는 떼지 않고 원문 그대로 전달 (G3, G4) |
+| B20 | hop-by-hop·Expect 지움, Host 유지, X-Forwarded-For 덧붙임 (G6) |
+| B21 | 요청마다 새 연결, HTTP/1.0 + Connection: close (G5) |
+| B22 | least_conn(같으면 라운드로빈) 또는 round_robin을 규칙마다 설정 (G14) |
+| B23 | 백엔드 connect 5초, 쓰기 사이 60초, 읽기 사이 60초 (G11) |
+| B24 | 실패 1번이면 10초 빼기, connect 실패만 재시도, 전부 빠지면 한 번은 시도 (G13) |
+| B28 | 백엔드 응답 상한 기본 8MB, 넘으면 502. 요청 본문 max_body 설정 가능 (G9) |
+| B25 | 루프 개수: 5단계 건너뜀 (2026-11-25). 루프 1개로 완성, 멀티 루프는 README 한계·설계로 남김 |
+| B26 | 공유 데이터 원자적 처리: 5단계 건너뜀. 바뀌는 값은 `upstream_t` 한 곳에 모아 둠 (G29) |
+| B27 | 정상 종료 마감 기본 5초, `shutdown_timeout`으로 설정 (E5) |
 
-아직 안 정한 B (해당 단계에서 정함): B17~B28. B7~B12의 자세한 내용은 `docs/step2-static.md`의 S 결정, B14~B16은 `docs/step3-loop.md`의 L 결정. 필요하면 멈추고 질문할 것.
+B25·B26은 5단계를 건너뛰어 README 한계로, B27은 `docs/step6-shutdown.md`의 E 결정. B7~B12의 자세한 내용은 `docs/step2-static.md`의 S 결정, B14~B16은 `docs/step3-loop.md`의 L 결정, B17~B24·B28은 `docs/step4-proxy.md`의 G 결정. 필요하면 멈추고 질문할 것.
 
 ## 6. 비목표
 
