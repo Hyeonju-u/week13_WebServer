@@ -1,0 +1,562 @@
+<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>웹서버 README 실증 덱</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 레이아웃: 1280×720 무대 하나를 화면에 맞춰 줄이고 늘림. 한 번에 슬라이드 하나, 스크롤 없음.
+   단일 어두운 무대(발표용)로 고정: 색은 모두 아래 토큰에서 나온다 */
+:root {
+  color-scheme: dark;
+  --room: #0b0e14;
+  --stage: #121722;
+  --panel: #1a2130;
+  --term: #0d1119;
+  --fg: #e8ecf3;
+  --muted: #98a2b5;
+  --line: #2a3346;
+  --accent: #7aa2ff;
+  --accent-ink: #0b1430;
+  --send: #8fb4ff;
+  --recv: #86dba4;
+  --good: #5fd08f;
+  --good-soft: #163525;
+  --bad: #ff8a80;
+  --limit: #e9c46a;
+  --limit-soft: #3a3118;
+  --warm: #f0a070;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+html, body { height: 100%; }
+body {
+  background: var(--room); color: var(--fg); font-family: var(--font-body);
+  overflow: hidden; margin: 0;
+}
+.viewport { position: fixed; inset: 0; overflow: hidden; }
+.stage {
+  width: 1280px; height: 720px; background: var(--stage); position: absolute; left: 50%; top: 50%;
+  transform-origin: center center; border-radius: 6px; overflow: hidden;
+}
+.slide { position: absolute; inset: 0; padding: 44px 56px 84px; display: none; flex-direction: column; gap: 18px; }
+.slide.active { display: flex; }
+.topline { display: flex; justify-content: space-between; align-items: center; font-size: 15px; color: var(--muted); letter-spacing: 0.04em; }
+.topline .section { color: var(--accent); font-weight: 600; }
+h1, h2 { margin: 0; text-wrap: balance; line-height: 1.25; }
+.claim-title { font-size: 34px; font-weight: 700; }
+.claim-how { font-size: 18px; color: var(--muted); }
+
+/* 실행 화면 */
+.runner { flex: 1; display: grid; grid-template-columns: 1fr; gap: 14px; min-height: 0; }
+.runner.with-chart { grid-template-columns: 1.25fr 1fr; }
+.term {
+  background: var(--term); border: 1px solid var(--line); border-radius: 10px;
+  padding: 18px 20px; font-family: var(--font-mono); font-size: 15.5px; line-height: 1.7;
+  overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 0;
+}
+.term .out { color: var(--send); }
+.term .in { color: var(--recv); }
+.term .cmd { color: var(--fg); font-weight: 600; }
+.term .note { color: var(--muted); }
+.term .placeholder { color: var(--muted); }
+.term .ff { color: var(--limit); }
+.cursor { display: inline-block; width: 9px; height: 1.1em; background: var(--fg); vertical-align: -3px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.chart-box { background: var(--term); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; grid-template-rows: auto 1fr auto; gap: 8px; min-height: 0; }
+.chart-box h3 { margin: 0; font-size: 15px; color: var(--muted); font-weight: 500; }
+.chart-box svg { width: 100%; height: 100%; }
+.controls { display: flex; align-items: center; gap: 18px; min-height: 56px; }
+.run {
+  font: inherit; font-size: 19px; font-weight: 700; padding: 12px 26px; border-radius: 10px; border: 0;
+  background: var(--accent); color: var(--accent-ink); cursor: pointer; display: inline-flex; gap: 10px; align-items: center;
+  white-space: nowrap; flex: none;
+}
+.verdict .chip { white-space: nowrap; }
+.clock { white-space: nowrap; }
+.run:disabled { opacity: 0.45; cursor: default; }
+button:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
+.clock { font-family: var(--font-mono); font-size: 17px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.verdict { margin-left: auto; display: none; align-items: center; gap: 14px; font-size: 19px; }
+.verdict.show { display: inline-flex; }
+.verdict .chip { font-weight: 700; padding: 6px 14px; border-radius: 999px; background: var(--good-soft); color: var(--good); }
+.verdict .chip.limit { background: var(--limit-soft); color: var(--limit); }
+.verdict .chip.no { background: #3d2120; color: var(--bad); }
+.verdict .evidence { font-family: var(--font-mono); font-weight: 600; }
+
+/* 표지·구역·마무리 */
+.cover { justify-content: center; gap: 26px; }
+.cover .eyebrow { font-size: 17px; color: var(--accent); letter-spacing: 0.08em; }
+.cover h1 { font-size: 56px; }
+.cover p { font-size: 21px; color: var(--muted); max-width: 46ch; line-height: 1.6; margin: 0; }
+.pillars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 10px; }
+.pillar { background: var(--panel); border-radius: 10px; padding: 16px 18px; display: grid; gap: 4px; }
+.pillar b { font-size: 19px; }
+.pillar span { color: var(--muted); font-size: 15px; }
+.divider { justify-content: center; gap: 18px; }
+.divider .num { font-family: var(--font-mono); font-size: 22px; color: var(--accent); }
+.divider h1 { font-size: 64px; }
+.divider p { font-size: 25px; color: var(--muted); margin: 0; }
+.divider ul { margin: 12px 0 0; padding-left: 22px; color: var(--muted); font-size: 18px; line-height: 1.8; }
+
+/* wrk 구역 */
+.lanes { display: grid; gap: 22px; background: var(--panel); border-radius: 12px; padding: 26px 28px; }
+.lane { display: grid; gap: 8px; }
+.lane-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 21px; }
+.lane-count { font-family: var(--font-mono); font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.track { height: 38px; background: var(--term); border-radius: 8px; overflow: hidden; }
+.fill { height: 100%; width: 0; border-radius: 8px; }
+.lane.multi .fill { background: var(--accent); }
+.lane.multi .lane-count { color: var(--accent); }
+.lane.single .fill { background: var(--warm); }
+.lane.single .lane-count { color: var(--warm); }
+.levels { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.levels button { font: inherit; font-size: 17px; padding: 10px 18px; border: 0; background: transparent; color: var(--fg); cursor: pointer; }
+.levels button + button { border-left: 1px solid var(--line); }
+.levels button[aria-pressed="true"] { background: var(--fg); color: var(--stage); }
+.race-foot { display: flex; justify-content: space-between; align-items: baseline; font-size: 18px; color: var(--muted); }
+.race-foot b { font-family: var(--font-mono); font-size: 30px; color: var(--accent); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; flex: 1; min-height: 0; }
+.box { background: var(--panel); border-radius: 12px; padding: 20px 22px; display: grid; gap: 12px; align-content: start; min-height: 0; }
+.box h3 { margin: 0; font-size: 18px; }
+.bar-group { display: grid; gap: 5px; }
+.bar-label { font-size: 14px; color: var(--muted); }
+.bar-row { display: grid; grid-template-columns: 1fr 130px; gap: 10px; align-items: center; }
+.bar { height: 18px; border-radius: 5px; }
+.bar.multi { background: var(--accent); }
+.bar.single { background: var(--warm); }
+.bar-value { font-family: var(--font-mono); font-size: 15px; text-align: right; font-variant-numeric: tabular-nums; }
+.bar-value.bad { color: var(--bad); }
+.legend { display: flex; gap: 22px; font-size: 16px; color: var(--muted); }
+.legend i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 8px; vertical-align: -2px; }
+.svg-text { fill: var(--muted); font-family: var(--font-mono); font-size: 13px; }
+.svg-grid { stroke: var(--line); stroke-width: 1; }
+table { border-collapse: collapse; width: 100%; font-size: 16px; }
+th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; font-size: 14px; }
+th:first-child, td:first-child { text-align: left; }
+td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.end-score { font-family: var(--font-mono); font-size: 96px; color: var(--good); line-height: 1; }
+pre.cmds { margin: 0; background: var(--term); border-radius: 10px; padding: 18px 22px; font-family: var(--font-mono); font-size: 16px; line-height: 1.8; color: var(--fg); }
+
+/* 넘기기 */
+.nav {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 64px; display: flex; align-items: center; gap: 14px;
+  padding: 0 56px; border-top: 1px solid var(--line); background: var(--stage);
+}
+.nav button { font: inherit; font-size: 17px; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; cursor: pointer; }
+.nav .count { font-family: var(--font-mono); color: var(--muted); font-size: 15px; }
+.nav .hint { margin-left: auto; color: var(--muted); font-size: 14px; }
+.progress { position: absolute; left: 0; top: 0; height: 3px; background: var(--accent); transition: width 0.2s; }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } .fill { transition: none !important; } }
+</style>
+
+<div class="viewport"><div class="stage" id="stage">
+  <div class="progress" id="progress"></div>
+  <div id="slides"></div>
+  <div class="nav">
+    <button type="button" id="prev" aria-label="이전 슬라이드">◀ 이전</button>
+    <button type="button" id="next" aria-label="다음 슬라이드">다음 ▶</button>
+    <span class="count" id="count"></span>
+    <span class="hint">← → 로 넘기기 · Enter로 실행</span>
+  </div>
+</div></div>
+
+<script>
+const DATA = {"proof": {"cores": 18, "results": [{"section": "memory", "claim": "연결 하나의 구조체는 320B", "how": "src/connection.h를 포함해 sizeof(conn_t)를 출력하는 C 파일을 컴파일해 실행", "log": [{"t": 0.0, "text": "$ cat size.c"}, {"t": 0.0, "text": "  int main (void) { printf(\"%zu\", sizeof(conn_t)); }"}, {"t": 0.28, "text": "$ cc -I src size.c -o size && ./size"}, {"t": 0.28, "text": "  320"}], "evidence": "320 바이트", "ok": true, "seconds": 0.28, "run": "memory"}, {"section": "memory", "claim": "버퍼는 필요할 때만 만든다 (가만히 있는 손님은 버퍼 없음)", "how": "손님 5,000명이 연결만 하고 아무것도 안 보낼 때 서버 메모리(/proc의 VmRSS) 변화", "log": [{"t": 0.0, "text": "$ webserver --root www --port 43193 --log-level info --max-connections 20000"}, {"t": 0.5, "text": "서버 VmRSS 1,728 kB   (손님 0명)"}, {"t": 0.65, "text": "→ 손님 5,000명 연결, 아무것도 안 보냄"}, {"t": 2.15, "text": "서버 VmRSS 2,736 kB   (+1,008 kB ÷ 5,000명 = 1명당 206바이트)"}], "evidence": "1명당 206 바이트", "ok": true, "seconds": 2.15, "run": "memory"}, {"section": "memory", "claim": "요청이 들어오면 그때 4KB 버퍼를 만든다", "how": "같은 5,000명이 요청 첫 줄만 보냈을 때 서버 메모리 변화", "log": [{"t": 0.06, "text": "→ 5,000명 모두 'GET /index.html HTTP/1.1' 한 줄만 보냄 (헤더는 아직)"}, {"t": 1.56, "text": "서버 VmRSS 23,184 kB   (+20,448 kB ÷ 5,000명 = 1명당 4.1 KB)"}], "evidence": "1명당 4.1 KB 더 씀", "ok": true, "seconds": 1.56, "run": "memory"}, {"section": "limits", "claim": "요청 줄 8KB 넘으면 414", "how": "URI가 9,000자인 GET", "log": [{"t": 0.0, "text": "→ GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa …(총 9,014자)… aaaaaaa HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "← HTTP/1.1 414 URI Too Long"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 96"}, {"t": 0.0, "text": "← Connection: close"}], "evidence": "응답 414", "ok": true, "seconds": 0.0, "run": "limits"}, {"section": "limits", "claim": "헤더 16KB 넘으면 431", "how": "17,000바이트짜리 헤더 하나", "log": [{"t": 0.0, "text": "→ GET / HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "→ X-Big: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa …(총 17,007자)… aaaaaaaaaaaaaaaa"}, {"t": 0.0, "text": "← HTTP/1.1 431 Request Header Fields Too Large"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 134"}, {"t": 0.0, "text": "← Connection: close"}], "evidence": "응답 431", "ok": true, "seconds": 0.0, "run": "limits"}, {"section": "limits", "claim": "본문 1MB 넘으면 413", "how": "Content-Length: 2,000,000인 POST (본문은 안 보냄)", "log": [{"t": 0.0, "text": "→ POST /index.html HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "→ Content-Length: 2000000"}, {"t": 0.0, "text": "← HTTP/1.1 413 Payload Too Large"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 106"}, {"t": 0.0, "text": "← Connection: close"}], "evidence": "응답 413", "ok": true, "seconds": 0.0, "run": "limits"}, {"section": "cleanup", "claim": "아무것도 안 보내는 손님은 15초 뒤 정리", "how": "연결만 하고 가만히 있기", "log": [{"t": 0.0, "text": "[  0.0초] → 연결함. 아무것도 안 보내고 기다림"}, {"t": 15.0, "text": "[ 15.0초] ← 서버가 연결을 끊음"}], "evidence": "15.0초 뒤 끊김", "ok": true, "seconds": 15.0, "run": "cleanup"}, {"section": "cleanup", "claim": "응답을 받고 쉬는(keep-alive) 손님은 5초 뒤 정리", "how": "요청 하나 보내고 응답을 받은 뒤 가만히 있기", "log": [{"t": 0.0, "text": "[  0.0초] → GET /index.html (keep-alive)"}, {"t": 0.0, "text": "[  0.0초] ← HTTP/1.1 200 OK"}, {"t": 0.0, "text": "[  0.0초]   응답을 받았고, 이제 아무것도 안 보냄"}, {"t": 4.87, "text": "[  4.9초] ← 서버가 연결을 끊음"}], "evidence": "4.9초 뒤 끊김", "ok": true, "seconds": 4.87, "run": "cleanup"}, {"section": "security", "claim": "Slowloris: 요청 읽기는 총 15초 (헤더를 조금씩 보내도 갱신 안 함)", "how": "헤더를 1초에 한 줄씩 끝없이 보내기", "log": [{"t": 0.0, "text": "[  0.0초] → GET /index.html HTTP/1.1  (빈 줄은 영원히 안 보냄)"}, {"t": 1.0, "text": "[  1.0초] → X-Slow-0: a"}, {"t": 2.0, "text": "[  2.0초] → X-Slow-1: a"}, {"t": 5.0, "text": "[  5.0초] → X-Slow-4: a"}, {"t": 10.01, "text": "[ 10.0초] → X-Slow-9: a"}, {"t": 15.02, "text": "[ 15.0초] → X-Slow-14: a"}, {"t": 16.02, "text": "[ 16.0초] ← 서버가 연결을 끊음 (헤더 15줄 보낸 뒤)"}], "evidence": "16.0초 뒤 끊김", "ok": true, "seconds": 16.02, "run": "cleanup"}, {"section": "sigpipe", "claim": "쓰는 도중 손님이 끊어도(SIGPIPE 무시) 그 연결만 닫고 서버는 유지", "how": "50MB 파일을 받다가 1KB만 읽고 강제로 끊기(RST)를 30번 → 다른 요청", "log": [{"t": 0.0, "text": "서버 PID 72, 열린 fd 57개"}, {"t": 0.0, "text": "→ GET /big.bin, 1,000바이트 받고 RST로 끊음  (1번째)"}, {"t": 0.0, "text": "  … 같은 일을 30번"}, {"t": 0.02, "text": "→ GET /big.bin, 1,000바이트 받고 RST로 끊음  (30번째)"}, {"t": 1.02, "text": "서버 PID 72 살아 있음, 열린 fd 57개"}, {"t": 1.02, "text": "→ GET /index.html   ← 200 <html><body>hello</body></html>"}], "evidence": "서버 유지, 다음 요청 200, fd 57 → 57개", "ok": true, "seconds": 1.02, "run": "sigpipe"}, {"section": "shutdown", "claim": "SIGINT을 받으면 새 연결은 거절하고, 처리 중이던 응답은 끝까지 보내고 종료", "how": "3초 걸리는 프록시 요청을 보내 두고 SIGINT → 새로 접속 → 처리 중이던 응답 확인", "log": [{"t": 0.0, "text": "$ webserver --root www --port 39423 --log-level info --config proxy.conf"}, {"t": 0.0, "text": "  proxy.conf: route /py 127.0.0.1:50291"}, {"t": 0.0, "text": "[  0.0초] → GET /py/slow?seconds=3  (백엔드가 3초 뒤 응답)"}, {"t": 0.51, "text": "[  0.5초] $ kill -INT 93"}, {"t": 1.71, "text": "[  1.7초] → 새 손님 접속 시도   ← 연결 거절 (ECONNREFUSED)"}, {"t": 3.0, "text": "[  3.0초] ← 처리 중이던 요청: 200 late"}, {"t": 3.01, "text": "[  3.0초]   서버 프로세스 끝남, 종료 코드 0"}, {"t": 3.01, "text": "  서버 로그: [INFO] 종료 신호를 받음: 진행 중인 응답만 마저 보냄  (×18, 루프마다 한 줄)"}, {"t": 3.01, "text": "  서버 로그: [INFO] 정상 종료"}], "evidence": "새 접속 거절, 처리 중이던 응답 200, 종료 코드 0", "ok": true, "seconds": 3.01, "run": "shutdown"}, {"section": "concurrency", "claim": "루프 수 = 컴퓨터 코어 수 (시작할 때 읽어서 결정)", "how": "--loops 없이 띄운 서버의 시작 로그와 스레드 수", "log": [{"t": 0.0, "text": "$ nproc"}, {"t": 0.0, "text": "  18"}, {"t": 0.0, "text": "$ webserver --root www --port 43211 --log-level info"}, {"t": 0.0, "text": "  서버 로그: [INFO] 포트 43211에서 시작 (루트 /tmp/proof-www, 루프 18개)"}, {"t": 0.0, "text": "$ ls /proc/114/task | wc -l"}, {"t": 0.0, "text": "  19   (루프 18개 + 메인 1개)"}], "evidence": "코어 18개 → 루프 18개", "ok": true, "seconds": 0.0, "run": "concurrency"}, {"section": "concurrency", "claim": "연결 수는 모든 루프가 같이 쓰는 값 하나 (원자 연산)", "how": "루프 18개 서버를 최대 연결 4로 띄우고 4명 연결 → 5번째 손님 → 1명 나감", "log": [{"t": 0.0, "text": "$ webserver --root www --port 46587 --log-level info --max-connections 4"}, {"t": 0.0, "text": "[  0.0초] 손님 1 → GET /index.html   ← 200 (연결 유지)"}, {"t": 0.0, "text": "[  0.0초] 손님 2 → GET /index.html   ← 200 (연결 유지)"}, {"t": 0.0, "text": "[  0.0초] 손님 3 → GET /index.html   ← 200 (연결 유지)"}, {"t": 0.0, "text": "[  0.0초] 손님 4 → GET /index.html   ← 200 (연결 유지)"}, {"t": 0.0, "text": "[  0.0초] 손님 5 → GET /index.html"}, {"t": 1.51, "text": "[  1.5초] 손님 5   1.5초 동안 응답 없음 (커널 대기줄에서 기다리는 중)"}, {"t": 1.51, "text": "[  1.5초] 손님 4가 나감"}, {"t": 1.89, "text": "[  1.9초] 손님 5   ← 200"}], "evidence": "5번째는 기다렸다가 자리가 나자 200", "ok": true, "seconds": 1.89, "run": "concurrency"}, {"section": "proxy", "claim": "경로 규칙별 Round-Robin (루프가 여럿이어도 차례 하나)", "how": "백엔드 B1·B2·B3(자기 포트를 답함)을 /api에 두고 매번 새 연결로 6번 요청 (루프 18개)", "log": [{"t": 0.0, "text": "$ webserver --root www --port 42599 --log-level info --config proxy.conf"}, {"t": 0.0, "text": "  proxy.conf: route /api 127.0.0.1:59217 127.0.0.1:37115 127.0.0.1:43661"}, {"t": 0.0, "text": "  proxy.conf: backend_fail_timeout 10"}, {"t": 0.0, "text": "  B1=59217, B2=37115, B3=43661"}, {"t": 0.0, "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.0, "text": "→ GET /api/hello   ← 200 backend 37115 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.01, "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.01, "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.01, "text": "→ GET /api/hello   ← 200 backend 37115 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.01, "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"}], "evidence": "B1 → B2 → B3 → B1 → B2 → B3", "ok": true, "seconds": 0.01, "run": "proxy"}, {"section": "security", "claim": "X-Forwarded-For 위조는 실제 주소로 덮어씀", "how": "X-Forwarded-For: 6.6.6.6을 넣어 /api 요청 → 백엔드가 실제로 받은 값", "log": [{"t": 0.0, "text": "→ GET /api/who HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "→ Connection: close"}, {"t": 0.0, "text": "→ X-Forwarded-For: 6.6.6.6"}, {"t": 0.0, "text": "← HTTP/1.1 200 OK"}, {"t": 0.0, "text": "← Content-Length: 43"}, {"t": 0.0, "text": "← Connection: close"}, {"t": 0.0, "text": "← backend 59217 | X-Forwarded-For: 127.0.0.1"}], "evidence": "백엔드가 받은 값 127.0.0.1", "ok": true, "seconds": 0.0, "run": "proxy"}, {"section": "proxy", "claim": "연결 실패한 백엔드는 10초 동안 뺌", "how": "B2를 죽이고 6번 요청", "log": [{"t": 0.0, "text": "$ kill B2 (포트 37115)"}, {"t": 0.0, "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.0, "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.0, "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.0, "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.01, "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"}, {"t": 0.01, "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"}], "evidence": "상태 200 200 200 200 200 200, 응답한 백엔드 B3 B3 B1 B3 B3 B1", "ok": true, "seconds": 0.01, "run": "proxy"}, {"section": "proxy", "claim": "백엔드가 전부 죽으면 502, 정적 파일은 프록시를 거치지 않음", "how": "백엔드 셋 다 죽이고 /api와 /index.html 요청", "log": [{"t": 0.0, "text": "$ kill B1 B3"}, {"t": 0.0, "text": "→ GET /api/hello   ← 502 <html><head><title>502 Bad Gateway</titl …(총 93자)… 1></body></html>"}, {"t": 0.0, "text": "→ GET /index.html   ← 200 <html><body>hello</body></html>"}], "evidence": "/api → 502, /index.html → 200", "ok": true, "seconds": 0.0, "run": "proxy"}, {"section": "proxy", "claim": "배압: 손님이 느리면 64KB에서 백엔드 읽기를 멈춤 (메모리 보호)", "how": "백엔드가 300MB를 보내는데 손님은 64KB만 읽고 멈춤 → 서버 메모리 변화", "log": [{"t": 0.0, "text": "서버 VmRSS 1,872 kB"}, {"t": 0.0, "text": "→ GET /py/big?mb=300   (백엔드가 300MB를 보냄)"}, {"t": 0.0, "text": "← 65,536바이트 받고 읽기를 멈춤"}, {"t": 1.0, "text": "  1초 뒤 서버 VmRSS 2,160 kB"}, {"t": 2.0, "text": "  2초 뒤 서버 VmRSS 2,160 kB"}, {"t": 3.0, "text": "  3초 뒤 서버 VmRSS 2,160 kB"}, {"t": 4.0, "text": "  4초 뒤 서버 VmRSS 2,160 kB"}], "evidence": "0.3 MB 늘어남 (쌓아 뒀다면 300MB)", "ok": true, "seconds": 4.0, "run": "proxy"}, {"section": "security", "claim": "../ 경로 이동은 404", "how": "GET /../etc/passwd (curl처럼 정리하지 않고 그대로)", "log": [{"t": 0.0, "text": "→ GET /../etc/passwd HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "← HTTP/1.1 404 Not Found"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 90"}, {"t": 0.0, "text": "← Connection: keep-alive"}], "evidence": "응답 404", "ok": true, "seconds": 0.0, "run": "security"}, {"section": "security", "claim": "숨김 파일 .env는 404", "how": "www/.env를 만들어 두고 GET /.env", "log": [{"t": 0.0, "text": "→ GET /.env HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "← HTTP/1.1 404 Not Found"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 90"}, {"t": 0.0, "text": "← Connection: keep-alive"}], "evidence": "응답 404", "ok": true, "seconds": 0.0, "run": "security"}, {"section": "security", "claim": "%2F 우회는 400", "how": "GET /a%2Fb", "log": [{"t": 0.0, "text": "→ GET /a%2Fb HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "← HTTP/1.1 400 Bad Request"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 94"}, {"t": 0.0, "text": "← Connection: close"}], "evidence": "응답 400", "ok": true, "seconds": 0.0, "run": "security"}, {"section": "security", "claim": "%00 우회는 400", "how": "GET /index.html%00.png", "log": [{"t": 0.0, "text": "→ GET /index.html%00.png HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "← HTTP/1.1 400 Bad Request"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 94"}, {"t": 0.0, "text": "← Connection: close"}], "evidence": "응답 400", "ok": true, "seconds": 0.0, "run": "security"}, {"section": "security", "claim": "심볼릭 링크는 403", "how": "www/link → /etc/passwd를 만들어 두고 GET /link", "log": [{"t": 0.0, "text": "→ GET /link HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "← HTTP/1.1 403 Forbidden"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 90"}, {"t": 0.0, "text": "← Connection: keep-alive"}], "evidence": "응답 403", "ok": true, "seconds": 0.0, "run": "security"}, {"section": "security", "claim": "요청 스머글링: Transfer-Encoding + Content-Length 동시면 400", "how": "두 헤더를 함께 보낸 POST", "log": [{"t": 0.0, "text": "→ POST /index.html HTTP/1.1"}, {"t": 0.0, "text": "→ Host: demo"}, {"t": 0.0, "text": "→ Transfer-Encoding: chunked"}, {"t": 0.0, "text": "→ Content-Length: 5"}, {"t": 0.0, "text": "→ (본문 5바이트)"}, {"t": 0.0, "text": "← HTTP/1.1 400 Bad Request"}, {"t": 0.0, "text": "← Content-Type: text/html; charset=utf-8"}, {"t": 0.0, "text": "← Content-Length: 94"}, {"t": 0.0, "text": "← Connection: close"}], "evidence": "응답 400", "ok": true, "seconds": 0.0, "run": "security"}, {"section": "attack", "claim": "slowhttptest Slowloris 1,000명: 약 15초에 정리, 서비스 유지", "how": "slowhttptest -H: 1,000명이 헤더를 5초마다 조금씩 보냄. 최대 40초 (공격 연결이 다 끊기면 일찍 끝남)", "log": [{"t": 0.0, "text": "$ slowhttptest -c 1000 -H -i 5 -r 200 -t GET -u http://서버/index.html -x 24 -p 3 -l 40"}, {"t": 20.47, "text": "    0초  붙어 있음    0  서버가 끊음    0  정상 요청 응답함"}, {"t": 20.47, "text": "    5초  붙어 있음  928  서버가 끊음    0  정상 요청 응답함"}, {"t": 20.47, "text": "   10초  붙어 있음 1000  서버가 끊음    0  정상 요청 응답함"}, {"t": 20.47, "text": "   15초  붙어 있음 1000  서버가 끊음    0  정상 요청 응답함"}, {"t": 20.47, "text": "   20초  붙어 있음   73  서버가 끊음  927  정상 요청 응답함"}], "evidence": "최대 동시 1000명, 16초부터 끊기 시작해 927개 정리, 서비스가 안 된 초 0번", "ok": true, "seconds": 20.47, "run": "attack"}, {"section": "attack", "claim": "한계: Slow Read(응답을 아주 느리게 받는 손님)는 정리되지 않음", "how": "slowhttptest -X: 500명이 50MB 파일 응답을 5초에 32바이트씩 읽음. 40초", "log": [{"t": 0.0, "text": "$ slowhttptest -c 500 -X -r 200 -w 512 -y 1024 -n 5 -z 32 -k 3 -u http://서버/big.bin -p 3 -l 40"}, {"t": 41.16, "text": "    0초  붙어 있음    0  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "    5초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   10초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   15초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   20초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   25초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   30초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   35초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   40초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}, {"t": 41.16, "text": "   41초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"}], "evidence": "40초 뒤에도 500명 남음, 서버가 끊은 연결 0개", "ok": true, "seconds": 41.16, "run": "attack"}]}, "slowloris": [{"t": 0, "connected": 0, "closed": 0, "up": true}, {"t": 1, "connected": 189, "closed": 0, "up": true}, {"t": 2, "connected": 376, "closed": 0, "up": true}, {"t": 3, "connected": 565, "closed": 0, "up": true}, {"t": 4, "connected": 746, "closed": 0, "up": true}, {"t": 5, "connected": 928, "closed": 0, "up": true}, {"t": 6, "connected": 1000, "closed": 0, "up": true}, {"t": 7, "connected": 1000, "closed": 0, "up": true}, {"t": 8, "connected": 1000, "closed": 0, "up": true}, {"t": 9, "connected": 1000, "closed": 0, "up": true}, {"t": 10, "connected": 1000, "closed": 0, "up": true}, {"t": 11, "connected": 1000, "closed": 0, "up": true}, {"t": 12, "connected": 1000, "closed": 0, "up": true}, {"t": 13, "connected": 1000, "closed": 0, "up": true}, {"t": 14, "connected": 1000, "closed": 0, "up": true}, {"t": 15, "connected": 1000, "closed": 0, "up": true}, {"t": 16, "connected": 812, "closed": 188, "up": true}, {"t": 17, "connected": 625, "closed": 375, "up": true}, {"t": 18, "connected": 436, "closed": 564, "up": true}, {"t": 19, "connected": 255, "closed": 745, "up": true}, {"t": 20, "connected": 73, "closed": 927, "up": true}], "slowread": [{"t": 0, "connected": 0, "closed": 0, "up": true}, {"t": 1, "connected": 216, "closed": 0, "up": true}, {"t": 2, "connected": 405, "closed": 0, "up": true}, {"t": 3, "connected": 500, "closed": 0, "up": true}, {"t": 4, "connected": 500, "closed": 0, "up": true}, {"t": 5, "connected": 500, "closed": 0, "up": true}, {"t": 6, "connected": 500, "closed": 0, "up": true}, {"t": 7, "connected": 500, "closed": 0, "up": true}, {"t": 8, "connected": 500, "closed": 0, "up": true}, {"t": 9, "connected": 500, "closed": 0, "up": true}, {"t": 10, "connected": 500, "closed": 0, "up": true}, {"t": 11, "connected": 500, "closed": 0, "up": true}, {"t": 12, "connected": 500, "closed": 0, "up": true}, {"t": 13, "connected": 500, "closed": 0, "up": true}, {"t": 14, "connected": 500, "closed": 0, "up": true}, {"t": 15, "connected": 500, "closed": 0, "up": true}, {"t": 16, "connected": 500, "closed": 0, "up": true}, {"t": 17, "connected": 500, "closed": 0, "up": true}, {"t": 18, "connected": 500, "closed": 0, "up": true}, {"t": 19, "connected": 500, "closed": 0, "up": true}, {"t": 20, "connected": 500, "closed": 0, "up": true}, {"t": 21, "connected": 500, "closed": 0, "up": true}, {"t": 22, "connected": 500, "closed": 0, "up": true}, {"t": 23, "connected": 500, "closed": 0, "up": true}, {"t": 24, "connected": 500, "closed": 0, "up": true}, {"t": 25, "connected": 500, "closed": 0, "up": true}, {"t": 26, "connected": 500, "closed": 0, "up": true}, {"t": 27, "connected": 500, "closed": 0, "up": true}, {"t": 28, "connected": 500, "closed": 0, "up": true}, {"t": 29, "connected": 500, "closed": 0, "up": true}, {"t": 30, "connected": 500, "closed": 0, "up": true}, {"t": 31, "connected": 500, "closed": 0, "up": true}, {"t": 32, "connected": 500, "closed": 0, "up": true}, {"t": 33, "connected": 500, "closed": 0, "up": true}, {"t": 34, "connected": 500, "closed": 0, "up": true}, {"t": 35, "connected": 500, "closed": 0, "up": true}, {"t": 36, "connected": 500, "closed": 0, "up": true}, {"t": 37, "connected": 500, "closed": 0, "up": true}, {"t": 38, "connected": 500, "closed": 0, "up": true}, {"t": 39, "connected": 500, "closed": 0, "up": true}, {"t": 40, "connected": 500, "closed": 0, "up": true}, {"t": 41, "connected": 500, "closed": 0, "up": true}], "load": {"tool": "wrk", "runs": [{"rps": 171700, "ok": 3448706, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 0.39, "p99_ms": 14.87, "max_ms": 78.73, "seconds": 20.1, "loops": 9, "connections": 100}, {"rps": 195651, "ok": 3932990, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 3.83, "p99_ms": 40.96, "max_ms": 183.61, "seconds": 20.1, "loops": 9, "connections": 1000}, {"rps": 140400, "ok": 2820482, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 63.77, "p99_ms": 148.93, "max_ms": 384.71, "seconds": 20.1, "loops": 9, "connections": 10000}, {"rps": 53570, "ok": 1074021, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 1.57, "p99_ms": 5.07, "max_ms": 29.71, "seconds": 20.1, "loops": 1, "connections": 100}, {"rps": 39635, "ok": 796548, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 24.27, "p99_ms": 46.99, "max_ms": 212.75, "seconds": 20.1, "loops": 1, "connections": 1000}, {"rps": 34849, "ok": 699649, "not_ok": 0, "timeouts": 3942, "socket_errors": 0, "p50_ms": 264.59, "p99_ms": 363.88, "max_ms": 1990.0, "seconds": 20.1, "loops": 1, "connections": 10000}]}, "scaling": {"tool": "wrk", "connections": 1000, "points": [{"rps": 41079, "ok": 618472, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 23.76, "p99_ms": 33.96, "max_ms": 141.75, "seconds": 15.1, "loops": 1, "busy_cores": 1.03, "speedup": 1.0, "ideal_rps": 41079, "rps_per_busy_core": 39883}, {"rps": 83582, "ok": 1262053, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 11.27, "p99_ms": 22.01, "max_ms": 94.38, "seconds": 15.1, "loops": 2, "busy_cores": 1.97, "speedup": 2.03, "ideal_rps": 82158, "rps_per_busy_core": 42427}, {"rps": 109792, "ok": 1647952, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 8.82, "p99_ms": 14.36, "max_ms": 46.67, "seconds": 15.0, "loops": 3, "busy_cores": 2.79, "speedup": 2.67, "ideal_rps": 123237, "rps_per_busy_core": 39352}, {"rps": 139103, "ok": 2098552, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 6.96, "p99_ms": 11.87, "max_ms": 45.47, "seconds": 15.1, "loops": 4, "busy_cores": 3.69, "speedup": 3.39, "ideal_rps": 164316, "rps_per_busy_core": 37697}, {"rps": 188480, "ok": 2844042, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 5.03, "p99_ms": 12.79, "max_ms": 68.46, "seconds": 15.1, "loops": 6, "busy_cores": 5.44, "speedup": 4.59, "ideal_rps": 246474, "rps_per_busy_core": 34647}, {"rps": 246053, "ok": 3706674, "not_ok": 0, "timeouts": 0, "socket_errors": 0, "p50_ms": 3.28, "p99_ms": 16.68, "max_ms": 57.62, "seconds": 15.1, "loops": 9, "busy_cores": 7.86, "speedup": 5.99, "ideal_rps": 369711, "rps_per_busy_core": 31304}]}};
+const fmt = n => Number(n).toLocaleString("ko-KR");
+const escape = text => String(text).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const SECTIONS = [
+  { key: "memory", num: "①", title: "메모리 관리", short: "한 명당 적게, 끝나면 바로 회수", thesis: "메모리는 유한하다 → 한 명당 적게 쓰고, 끝난 연결은 바로 회수" },
+  { key: "concurrency", num: "②", title: "동시성", short: "코어 수만큼 이벤트 루프", thesis: "많은 요청을 동시에 → 스레드가 잠들지 않는 구조로" },
+  { key: "proxy", num: "③", title: "리버스 프록시", short: "여러 백엔드로 분산, 장애 제외", thesis: "백엔드 한 대의 과부하 → 앞에서 받아 여러 대로 분산" },
+  { key: "security", num: "④", title: "보안", short: "악의적인 요청과 느린 공격 차단", thesis: "사용자가 많으면 공격도 섞인다" },
+  { key: "limit", num: "한계", title: "README에 적은 한계", thesis: "한계로 적은 것도 정말 그런지 확인" },
+];
+const groupOf = r => {
+  if (r.claim.startsWith("한계")) { return "limit"; }
+  if (["memory", "limits", "cleanup", "sigpipe", "shutdown"].includes(r.section)) { return "memory"; }
+  if (r.section === "attack") { return "security"; }
+  return r.section;
+};
+/* slowhttptest 표 줄은 도구가 끝난 뒤 CSV에서 한꺼번에 찍혔다. 줄에 적힌 초(공격 시작 기준)에 맞춰 내보낸다 */
+const entriesOf = r => {
+  const entries = (r.log || []).map((entry, i) => typeof entry === "string" ? { t: i * 0.3, text: entry } : entry);
+  const command = entries.find(entry => entry.text.startsWith("$ slowhttptest"));
+  return entries.map(entry => {
+    const match = command && entry.text.match(/^\s*(\d+)초\s+붙어 있음/);
+    return match ? { t: command.t + Number(match[1]), text: entry.text } : entry;
+  });
+};
+const kindOf = line => {
+  if (/^(\[[ \d.]+초\] )?\$/.test(line)) { return "cmd"; }
+  if (line.includes("←")) { return "in"; }
+  if (/^(\[[ \d.]+초\] )?(손님 \d )?→/.test(line) || line.startsWith("→")) { return "out"; }
+  return "note";
+};
+
+/* ── 슬라이드 목록 만들기 ── */
+const slides = [];
+const results = DATA.proof.results;
+const passed = results.filter(r => r.ok).length;
+
+slides.push({ kind: "cover", html: `
+  <div class="eyebrow">WEEK 13 · C 웹서버 + 리버스 프록시</div>
+  <h1>README에 쓴 말,<br>실제로 돌려서 보여 드립니다</h1>
+  <p>주장마다 실행 버튼을 누르면, 실제 서버에 보냈던 요청과 서버가 돌려준 응답이 기록된 시간 그대로 다시 재생됩니다.</p>
+  <div class="pillars">${SECTIONS.slice(0, 4).map(s => `<div class="pillar"><b>${s.num} ${s.title}</b><span>${s.short}</span></div>`).join("")}</div>` });
+
+SECTIONS.forEach(section => {
+  const claims = results.filter(r => groupOf(r) === section.key);
+  if (!claims.length) { return; }
+  slides.push({ kind: "divider", html: `
+    <div class="num">${section.num}</div><h1>${section.title}</h1><p>${section.thesis}</p>
+    <ul>${claims.map(r => `<li>${escape(r.claim)}</li>`).join("")}</ul>` });
+  claims.forEach(r => slides.push({ kind: "claim", section, result: r }));
+});
+slides.push({ kind: "race" }, { kind: "bars" }, { kind: "scaling" }, { kind: "end" });
+
+/* ── 그리기 (아래 상수가 모두 선언된 뒤 맨 끝에서 부른다) ── */
+function drawSlides() {
+const box = document.getElementById("slides");
+slides.forEach((slide, index) => {
+  const element = document.createElement("section");
+  element.className = "slide" + (slide.kind === "cover" ? " cover" : slide.kind === "divider" ? " divider" : "");
+  element.id = "slide-" + index;
+  element.setAttribute("aria-roledescription", "slide");
+  if (slide.html) { element.innerHTML = slide.html; }
+  if (slide.kind === "claim") { element.innerHTML = renderClaim(slide, index); }
+  if (slide.kind === "race") { element.innerHTML = renderRace(); }
+  if (slide.kind === "bars") { element.innerHTML = renderBars(); }
+  if (slide.kind === "scaling") { element.innerHTML = renderScaling(); }
+  if (slide.kind === "end") { element.innerHTML = renderEnd(); }
+  box.appendChild(element);
+});
+}
+
+function topline(label) {
+  return `<div class="topline"><span class="section">${label}</span><span>실제 기록 재생 · Docker Ubuntu 24.04, 코어 ${DATA.proof.cores}개</span></div>`;
+}
+
+function chartFor(result) {
+  if (result.claim.includes("Slowloris 1,000명")) { return { rows: DATA.slowloris, title: "slowhttptest가 본 공격 연결 수", marker: 15 }; }
+  if (result.claim.startsWith("한계: Slow Read")) { return { rows: DATA.slowread, title: "slowhttptest가 본 공격 연결 수", marker: 0 }; }
+  return null;
+}
+
+function renderClaim(slide, index) {
+  const r = slide.result;
+  const chart = chartFor(r);
+  return topline(`${slide.section.num} ${slide.section.title}`) +
+    `<h2 class="claim-title">${escape(r.claim)}</h2><div class="claim-how">${escape(r.how)}</div>
+    <div class="runner${chart ? " with-chart" : ""}">
+      <div class="term" id="term-${index}" aria-live="polite"></div>
+      ${chart ? `<div class="chart-box"><h3>${chart.title}</h3><svg id="chart-${index}" viewBox="0 0 460 300" preserveAspectRatio="none" role="img" aria-label="${chart.title}"></svg>
+        <div class="legend"><span><i style="background:var(--accent)"></i>붙어 있음</span><span><i style="background:var(--warm)"></i>서버가 끊음(누적)</span></div></div>` : ""}
+    </div>
+    <div class="controls">
+      <button class="run" type="button" id="run-${index}">▶ 실행</button>
+      <span class="clock" id="clock-${index}"></span>
+      <span class="verdict" id="verdict-${index}"></span>
+    </div>`;
+}
+
+/* ── 기록 재생 ── */
+let playToken = 0;
+
+function resetClaim(index) {
+  const slide = slides[index];
+  const term = document.getElementById("term-" + index);
+  const first = entriesOf(slide.result).find(entry => kindOf(entry.text) === "cmd" || kindOf(entry.text) === "out");
+  term.innerHTML = `<span class="placeholder">▶ 실행을 누르면 실제로 보냈던 요청과 받은 응답을 기록된 시간대로 재생합니다.</span>\n<span class="cursor"></span>`;
+  document.getElementById("clock-" + index).textContent = "";
+  const verdict = document.getElementById("verdict-" + index);
+  verdict.className = "verdict";
+  verdict.innerHTML = "";
+  document.getElementById("run-" + index).disabled = false;
+  document.getElementById("run-" + index).textContent = "▶ 실행";
+  const chart = chartFor(slide.result);
+  if (chart) { drawAttack(document.getElementById("chart-" + index), chart, -1); }
+  return first;
+}
+
+async function playClaim(index) {
+  const token = ++playToken;
+  const slide = slides[index];
+  const r = slide.result;
+  const entries = entriesOf(r);
+  const term = document.getElementById("term-" + index);
+  const clock = document.getElementById("clock-" + index);
+  const button = document.getElementById("run-" + index);
+  const chart = chartFor(r);
+  resetClaim(index);
+  button.disabled = true;
+  button.textContent = "실행 중…";
+  term.innerHTML = "";
+  let recorded = 0;
+  const alive = () => token === playToken;
+  const showClock = seconds => { clock.textContent = `경과 ${seconds.toFixed(1)}초 (실제 기록 기준)`; };
+  showClock(0);
+  entries.sort((a, b) => a.t - b.t);
+  for (const entry of entries) {
+    if (!alive()) { return; }
+    await waitRecorded(recorded, entry.t, showClock, term, alive, chart ? progress => drawAttack(document.getElementById("chart-" + index), chart, progress) : null, r.seconds);
+    if (!alive()) { return; }
+    recorded = Math.max(recorded, entry.t);
+    await writeLine(term, entry.text, alive);
+  }
+  await waitRecorded(recorded, r.seconds || recorded, showClock, term, alive, null, r.seconds);
+  if (!alive()) { return; }
+  if (chart) { drawAttack(document.getElementById("chart-" + index), chart, 1); }
+  showClock(r.seconds || recorded);
+  const verdict = document.getElementById("verdict-" + index);
+  const chip = !r.ok ? '<span class="chip no">✘ 다름</span>'
+    : r.claim.startsWith("한계") ? '<span class="chip limit">한계 확인</span>' : '<span class="chip">✔ README대로</span>';
+  verdict.innerHTML = `${chip}<span class="evidence">${escape(r.evidence)}</span>`;
+  verdict.className = "verdict show";
+  button.disabled = false;
+  button.textContent = "↻ 다시 실행";
+}
+
+/* 1.5초 넘는 기다림은 빨리 감되, 시계는 실제 기록 시간을 보여 준다 */
+async function waitRecorded(from, to, showClock, term, alive, onProgress, total) {
+  const gap = to - from;
+  if (gap <= 0.01) { return; }
+  const fast = gap > 1.5;
+  const duration = REDUCED ? 0 : fast ? Math.min(3200, 900 + gap * 120) : gap * 1000;
+  let note = null;
+  if (fast && duration > 0) {
+    note = document.createElement("span");
+    note.className = "ff";
+    note.textContent = `⏩ 실제로는 ${gap.toFixed(1)}초 기다림 (빨리 감는 중)\n`;
+    term.appendChild(note);
+    term.scrollTop = term.scrollHeight;
+  }
+  const start = performance.now();
+  while (alive()) {
+    const ratio = duration ? Math.min((performance.now() - start) / duration, 1) : 1;
+    const now = from + gap * ratio;
+    showClock(now);
+    if (onProgress && total) { onProgress(now / total); }
+    if (ratio >= 1) { break; }
+    await sleep(40);
+  }
+  if (note) { note.remove(); }
+}
+
+async function writeLine(term, text, alive) {
+  const span = document.createElement("span");
+  span.className = kindOf(text);
+  term.appendChild(span);
+  term.appendChild(document.createTextNode("\n"));
+  const typed = span.className === "cmd" || span.className === "out";
+  if (!typed || REDUCED) {
+    span.textContent = text;
+  } else {
+    const step = Math.max(1, Math.ceil(text.length / 45));
+    for (let i = 0; i < text.length && alive(); i += step) {
+      span.textContent = text.slice(0, i + step);
+      term.scrollTop = term.scrollHeight;
+      await sleep(14);
+    }
+    span.textContent = text;
+  }
+  term.scrollTop = term.scrollHeight;
+  if (!typed && !REDUCED) { await sleep(90); }
+}
+
+function drawAttack(svg, chart, progress) {
+  const rows = chart.rows;
+  if (!svg || !rows.length) { return; }
+  const width = 460, height = 300, left = 46, right = 10, top = 12, bottom = 28;
+  const maxT = rows[rows.length - 1].t;
+  const maxY = Math.max(...rows.map(r => Math.max(r.connected, r.closed)));
+  const yTop = Math.ceil(maxY / 250) * 250 || 250;
+  const x = t => left + t / maxT * (width - left - right);
+  const y = v => top + (1 - v / yTop) * (height - top - bottom);
+  const shown = progress < 0 ? [] : rows.filter(r => r.t <= progress * maxT + 0.001);
+  let html = "";
+  for (let v = 0; v <= yTop; v += yTop / 4) {
+    html += `<line class="svg-grid" x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}"/><text class="svg-text" x="${left - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  for (let t = 0; t <= maxT; t += 10) {
+    html += `<text class="svg-text" x="${x(t)}" y="${height - 8}" text-anchor="middle">${t}초</text>`;
+  }
+  if (chart.marker) {
+    html += `<line x1="${x(chart.marker)}" x2="${x(chart.marker)}" y1="${top}" y2="${height - bottom}" stroke="var(--fg)" stroke-dasharray="4 4" opacity="0.5"/>` +
+      `<text class="svg-text" x="${x(chart.marker) + 5}" y="${top + 12}" style="fill:var(--fg)">${chart.marker}초</text>`;
+  }
+  if (shown.length) {
+    html += `<polyline fill="none" stroke="var(--accent)" stroke-width="3" points="${shown.map(r => `${x(r.t)},${y(r.connected)}`).join(" ")}"/>`;
+    html += `<polyline fill="none" stroke="var(--warm)" stroke-width="3" points="${shown.map(r => `${x(r.t)},${y(r.closed)}`).join(" ")}"/>`;
+  }
+  svg.innerHTML = html;
+}
+
+/* ── wrk 구역 ── */
+const LOAD = DATA.load;
+const MULTI = LOAD ? Math.max(...LOAD.runs.map(r => r.loops)) : 0;
+const LEVELS = LOAD ? [...new Set(LOAD.runs.map(r => r.connections))].sort((a, b) => a - b) : [];
+const findRun = (loops, c) => LOAD.runs.find(r => r.loops === loops && r.connections === c);
+let raceLevel = LEVELS.includes(10000) ? 10000 : LEVELS[0];
+
+function renderRace() {
+  if (!LOAD) { return topline("② 동시성 · wrk") + "<h2 class='claim-title'>wrk 결과 없음</h2>"; }
+  return topline("② 동시성 · wrk 부하 테스트") +
+    `<h2 class="claim-title">같은 코어 9개, 같은 20초: 몇 건이나 처리했나</h2>
+    <div class="claim-how">wrk 4.2 (과제 문서의 부하 도구) · 서버 코어 9개, wrk는 다른 코어 9개 · 2초 안에 응답 없으면 타임아웃</div>
+    <div class="controls"><div class="levels" role="group" aria-label="동시 연결 수">${LEVELS.map(c =>
+      `<button type="button" data-level="${c}">연결 ${fmt(c)}</button>`).join("")}</div>
+      <button class="run" type="button" id="race-run">▶ 재생</button></div>
+    <div class="lanes">
+      <div class="lane multi"><div class="lane-head"><span>멀티 루프 (루프 ${MULTI}개)</span><span class="lane-count" id="race-multi">0</span></div><div class="track"><div class="fill" id="race-fill-multi"></div></div><div class="bar-label" id="race-sub-multi"></div></div>
+      <div class="lane single"><div class="lane-head"><span>단일 루프 (루프 1개)</span><span class="lane-count" id="race-single">0</span></div><div class="track"><div class="fill" id="race-fill-single"></div></div><div class="bar-label" id="race-sub-single"></div></div>
+    </div>
+    <div class="race-foot"><span id="race-clock"></span><span id="race-verdict"></span></div>`;
+}
+
+let raceFrame = null;
+function setRaceLevel(level) {
+  raceLevel = level;
+  cancelAnimationFrame(raceFrame);
+  document.querySelectorAll("[data-level]").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.level) === level)));
+  const m = findRun(MULTI, level), s = findRun(1, level);
+  document.getElementById("race-multi").textContent = "0";
+  document.getElementById("race-single").textContent = "0";
+  document.getElementById("race-fill-multi").style.width = "0%";
+  document.getElementById("race-fill-single").style.width = "0%";
+  document.getElementById("race-sub-multi").textContent = "";
+  document.getElementById("race-sub-single").textContent = "";
+  document.getElementById("race-clock").textContent = `동시 연결 ${fmt(level)}개 · ▶ 재생을 누르세요`;
+  document.getElementById("race-verdict").innerHTML = "";
+}
+
+function playRace() {
+  cancelAnimationFrame(raceFrame);
+  const m = findRun(MULTI, raceLevel), s = findRun(1, raceLevel);
+  const replayMs = REDUCED ? 1 : 6000, start = performance.now();
+  const step = now => {
+    const p = Math.min((now - start) / replayMs, 1);
+    document.getElementById("race-multi").textContent = fmt(Math.round(m.ok * p));
+    document.getElementById("race-single").textContent = fmt(Math.round(s.ok * p));
+    document.getElementById("race-fill-multi").style.width = (p * 100) + "%";
+    document.getElementById("race-fill-single").style.width = (s.ok / m.ok * p * 100) + "%";
+    document.getElementById("race-clock").textContent = `${(m.seconds * p).toFixed(1)}초 / ${m.seconds}초 (6초로 줄여 재생)`;
+    if (p < 1) { raceFrame = requestAnimationFrame(step); return; }
+    document.getElementById("race-sub-multi").textContent = `초당 ${fmt(m.rps)} · p99 ${m.p99_ms} ms · 타임아웃 ${fmt(m.timeouts)}`;
+    document.getElementById("race-sub-single").textContent = `초당 ${fmt(s.rps)} · p99 ${s.p99_ms} ms · 타임아웃 ${fmt(s.timeouts)}`;
+    document.getElementById("race-verdict").innerHTML = `<b>${(m.ok / s.ok).toFixed(1)}배</b> 더 처리`;
+  };
+  raceFrame = requestAnimationFrame(step);
+}
+
+function renderBars() {
+  if (!LOAD) { return ""; }
+  const maxRps = Math.max(...LOAD.runs.map(r => r.rps));
+  const maxP99 = Math.max(...LOAD.runs.map(r => r.p99_ms));
+  const group = (key, max, format) => LEVELS.map(c => `<div class="bar-group"><span class="bar-label">동시 연결 ${fmt(c)}</span>` +
+    [[MULTI, "multi"], [1, "single"]].map(([loops, name]) => {
+      const r = findRun(loops, c);
+      const bad = key === "p99_ms" && r.timeouts > 0;
+      return `<div class="bar-row"><div><div class="bar ${name}" style="width:${(r[key] / max * 100).toFixed(1)}%"></div></div>` +
+        `<span class="bar-value${bad ? " bad" : ""}">${format(r)}</span></div>`;
+    }).join("") + "</div>").join("");
+  return topline("② 동시성 · wrk 부하 테스트") +
+    `<h2 class="claim-title">동시 연결이 늘어도 멀티 루프는 타임아웃 0건</h2>
+    <div class="legend"><span><i style="background:var(--accent)"></i>멀티 루프 (${MULTI}개)</span><span><i style="background:var(--warm)"></i>단일 루프</span></div>
+    <div class="grid2">
+      <div class="box"><h3>초당 요청 수 (높을수록 좋음)</h3>${group("rps", maxRps, r => fmt(r.rps))}</div>
+      <div class="box"><h3>p99 응답 시간 (낮을수록 좋음)</h3>${group("p99_ms", maxP99, r => r.p99_ms + " ms" + (r.timeouts ? ` · 타임아웃 ${fmt(r.timeouts)}` : ""))}</div>
+    </div>`;
+}
+
+function renderScaling() {
+  const scaling = DATA.scaling;
+  if (!scaling) { return ""; }
+  const points = scaling.points;
+  const width = 640, height = 330, left = 56, right = 40, top = 16, bottom = 34;
+  const last = points[points.length - 1];
+  const maxRps = Math.max(...points.map(p => Math.max(p.rps, p.ideal_rps)));
+  const yMax = Math.ceil(maxRps / 100000) * 100000;
+  const x = loops => left + (loops - 1) / (last.loops - 1 || 1) * (width - left - right);
+  const y = rps => top + (1 - rps / yMax) * (height - top - bottom);
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="루프 수별 초당 요청 수" style="width:100%;height:auto">`;
+  for (let v = 0; v <= yMax; v += 100000) {
+    svg += `<line class="svg-grid" x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}"/><text class="svg-text" x="${left - 8}" y="${y(v) + 4}" text-anchor="end">${v / 1000}k</text>`;
+  }
+  points.forEach(p => { svg += `<text class="svg-text" x="${x(p.loops)}" y="${height - 10}" text-anchor="middle">루프 ${p.loops}</text>`; });
+  svg += `<polyline fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 5" points="${points.map(p => `${x(p.loops)},${y(p.ideal_rps)}`).join(" ")}"/>`;
+  svg += `<polyline fill="none" stroke="var(--accent)" stroke-width="3.5" points="${points.map(p => `${x(p.loops)},${y(p.rps)}`).join(" ")}"/>`;
+  points.forEach(p => {
+    svg += `<circle cx="${x(p.loops)}" cy="${y(p.rps)}" r="5" fill="var(--accent)"/><text class="svg-text" x="${x(p.loops)}" y="${y(p.rps) + 22}" text-anchor="middle" style="fill:var(--fg);font-weight:600">${p.speedup}×</text>`;
+  });
+  svg += "</svg>";
+  return topline("② 동시성 · 루프 수를 늘리면") +
+    `<h2 class="claim-title">루프 2개까지는 정확히 2배, 9개에서 ${last.speedup}배</h2>
+    <div class="grid2">
+      <div class="box">${svg}<div class="legend"><span><i style="background:var(--accent)"></i>실제 측정</span><span><i style="background:var(--muted)"></i>모든 코어가 루프 1개만큼 일했다면</span></div></div>
+      <div class="box"><table><thead><tr><th>루프</th><th>일한 코어</th><th>초당 요청</th><th>코어당</th></tr></thead><tbody>
+        ${points.map(p => `<tr><td>${p.loops}</td><td>${p.busy_cores.toFixed(1)}</td><td>${fmt(p.rps)}</td><td>${fmt(p.rps_per_busy_core)}</td></tr>`).join("")}
+      </tbody></table>
+      <p class="claim-how" style="font-size:16px;margin:0">9배가 안 되는 이유: 루프 9개가 코어를 ${last.busy_cores.toFixed(1)}개분만 썼고(부하를 주는 wrk도 같은 노트북), 코어 하나당 처리량이 ${fmt(points[0].rps_per_busy_core)} → ${fmt(last.rps_per_busy_core)}로 줄었습니다. 이 노트북 CPU는 빠른 P코어 4개와 E코어가 섞여 있습니다.</p></div>
+    </div>`;
+}
+
+function renderEnd() {
+  return `<div class="topline"><span class="section">정리</span><span></span></div>
+    <div style="display:flex;align-items:center;gap:36px;margin-top:20px"><div class="end-score">${passed}/${results.length}</div>
+    <h2 class="claim-title" style="font-size:38px">README 주장을 실제 서버에서<br>그대로 재현했습니다</h2></div>
+    <p class="claim-how">한계로 적은 Slow Read도 그대로 남아 있음을 확인했습니다. wrk 1만 연결: 멀티 루프 타임아웃 0건, 단일 루프 ${LOAD ? fmt(findRun(1, 10000).timeouts) : "-"}건.</p>
+    <pre class="cmds">docker build -t webserver-demo demo     # 처음 한 번
+demo/proof.sh shutdown                  # 주장을 터미널에서 직접 실행 (구역별)
+demo/live.sh 9 1000 15                  # wrk 부하 + 코어 사용률 실시간</pre>`;
+}
+
+/* ── 넘기기 ── */
+let current = 0;
+function show(index) {
+  index = Math.max(0, Math.min(slides.length - 1, index));
+  playToken++;
+  cancelAnimationFrame(raceFrame);
+  document.querySelectorAll(".slide").forEach((el, i) => el.classList.toggle("active", i === index));
+  current = index;
+  document.getElementById("count").textContent = `${index + 1} / ${slides.length}`;
+  document.getElementById("progress").style.width = ((index + 1) / slides.length * 100) + "%";
+  document.getElementById("prev").disabled = index === 0;
+  document.getElementById("next").disabled = index === slides.length - 1;
+  if (slides[index].kind === "claim") { resetClaim(index); }
+  if (slides[index].kind === "race") { setRaceLevel(raceLevel); }
+  if (location.hash !== "#s" + (index + 1)) { history.replaceState(null, "", "#s" + (index + 1)); }
+}
+
+function runCurrent() {
+  if (slides[current].kind === "claim") { playClaim(current); }
+  if (slides[current].kind === "race") { playRace(); }
+}
+
+function fitStage() {
+  const stage = document.getElementById("stage");
+  const scale = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+  stage.style.transform = `translate(-50%, -50%) scale(${scale})`;
+}
+
+document.getElementById("prev").addEventListener("click", () => show(current - 1));
+document.getElementById("next").addEventListener("click", () => show(current + 1));
+document.addEventListener("click", event => {
+  const level = event.target.closest("[data-level]");
+  if (level) { setRaceLevel(Number(level.dataset.level)); }
+  if (event.target.closest(".run")) { runCurrent(); }
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "ArrowRight" || event.key === "PageDown") { show(current + 1); event.preventDefault(); }
+  if (event.key === "ArrowLeft" || event.key === "PageUp") { show(current - 1); event.preventDefault(); }
+  if (event.key === "Enter" && !event.target.closest("button")) { runCurrent(); event.preventDefault(); }
+});
+window.addEventListener("resize", fitStage);
+drawSlides();
+fitStage();
+const fromHash = parseInt((location.hash.match(/^#s(\d+)$/) || [])[1], 10);
+show(Number.isFinite(fromHash) ? fromHash - 1 : 0);
+</script>

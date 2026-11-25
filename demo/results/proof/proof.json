@@ -1,0 +1,947 @@
+{
+ "cores": 18,
+ "results": [
+  {
+   "section": "memory",
+   "claim": "연결 하나의 구조체는 320B",
+   "how": "src/connection.h를 포함해 sizeof(conn_t)를 출력하는 C 파일을 컴파일해 실행",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ cat size.c"
+    },
+    {
+     "t": 0.0,
+     "text": "  int main (void) { printf(\"%zu\", sizeof(conn_t)); }"
+    },
+    {
+     "t": 0.28,
+     "text": "$ cc -I src size.c -o size && ./size"
+    },
+    {
+     "t": 0.28,
+     "text": "  320"
+    }
+   ],
+   "evidence": "320 바이트",
+   "ok": true,
+   "seconds": 0.28,
+   "run": "memory"
+  },
+  {
+   "section": "memory",
+   "claim": "버퍼는 필요할 때만 만든다 (가만히 있는 손님은 버퍼 없음)",
+   "how": "손님 5,000명이 연결만 하고 아무것도 안 보낼 때 서버 메모리(/proc의 VmRSS) 변화",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ webserver --root www --port 43193 --log-level info --max-connections 20000"
+    },
+    {
+     "t": 0.5,
+     "text": "서버 VmRSS 1,728 kB   (손님 0명)"
+    },
+    {
+     "t": 0.65,
+     "text": "→ 손님 5,000명 연결, 아무것도 안 보냄"
+    },
+    {
+     "t": 2.15,
+     "text": "서버 VmRSS 2,736 kB   (+1,008 kB ÷ 5,000명 = 1명당 206바이트)"
+    }
+   ],
+   "evidence": "1명당 206 바이트",
+   "ok": true,
+   "seconds": 2.15,
+   "run": "memory"
+  },
+  {
+   "section": "memory",
+   "claim": "요청이 들어오면 그때 4KB 버퍼를 만든다",
+   "how": "같은 5,000명이 요청 첫 줄만 보냈을 때 서버 메모리 변화",
+   "log": [
+    {
+     "t": 0.06,
+     "text": "→ 5,000명 모두 'GET /index.html HTTP/1.1' 한 줄만 보냄 (헤더는 아직)"
+    },
+    {
+     "t": 1.56,
+     "text": "서버 VmRSS 23,184 kB   (+20,448 kB ÷ 5,000명 = 1명당 4.1 KB)"
+    }
+   ],
+   "evidence": "1명당 4.1 KB 더 씀",
+   "ok": true,
+   "seconds": 1.56,
+   "run": "memory"
+  },
+  {
+   "section": "limits",
+   "claim": "요청 줄 8KB 넘으면 414",
+   "how": "URI가 9,000자인 GET",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa …(총 9,014자)… aaaaaaa HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 414 URI Too Long"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 96"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: close"
+    }
+   ],
+   "evidence": "응답 414",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "limits"
+  },
+  {
+   "section": "limits",
+   "claim": "헤더 16KB 넘으면 431",
+   "how": "17,000바이트짜리 헤더 하나",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET / HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "→ X-Big: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa …(총 17,007자)… aaaaaaaaaaaaaaaa"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 431 Request Header Fields Too Large"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 134"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: close"
+    }
+   ],
+   "evidence": "응답 431",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "limits"
+  },
+  {
+   "section": "limits",
+   "claim": "본문 1MB 넘으면 413",
+   "how": "Content-Length: 2,000,000인 POST (본문은 안 보냄)",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ POST /index.html HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Content-Length: 2000000"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 413 Payload Too Large"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 106"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: close"
+    }
+   ],
+   "evidence": "응답 413",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "limits"
+  },
+  {
+   "section": "cleanup",
+   "claim": "아무것도 안 보내는 손님은 15초 뒤 정리",
+   "how": "연결만 하고 가만히 있기",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "[  0.0초] → 연결함. 아무것도 안 보내고 기다림"
+    },
+    {
+     "t": 15.0,
+     "text": "[ 15.0초] ← 서버가 연결을 끊음"
+    }
+   ],
+   "evidence": "15.0초 뒤 끊김",
+   "ok": true,
+   "seconds": 15.0,
+   "run": "cleanup"
+  },
+  {
+   "section": "cleanup",
+   "claim": "응답을 받고 쉬는(keep-alive) 손님은 5초 뒤 정리",
+   "how": "요청 하나 보내고 응답을 받은 뒤 가만히 있기",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "[  0.0초] → GET /index.html (keep-alive)"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초] ← HTTP/1.1 200 OK"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초]   응답을 받았고, 이제 아무것도 안 보냄"
+    },
+    {
+     "t": 4.87,
+     "text": "[  4.9초] ← 서버가 연결을 끊음"
+    }
+   ],
+   "evidence": "4.9초 뒤 끊김",
+   "ok": true,
+   "seconds": 4.87,
+   "run": "cleanup"
+  },
+  {
+   "section": "security",
+   "claim": "Slowloris: 요청 읽기는 총 15초 (헤더를 조금씩 보내도 갱신 안 함)",
+   "how": "헤더를 1초에 한 줄씩 끝없이 보내기",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "[  0.0초] → GET /index.html HTTP/1.1  (빈 줄은 영원히 안 보냄)"
+    },
+    {
+     "t": 1.0,
+     "text": "[  1.0초] → X-Slow-0: a"
+    },
+    {
+     "t": 2.0,
+     "text": "[  2.0초] → X-Slow-1: a"
+    },
+    {
+     "t": 5.0,
+     "text": "[  5.0초] → X-Slow-4: a"
+    },
+    {
+     "t": 10.01,
+     "text": "[ 10.0초] → X-Slow-9: a"
+    },
+    {
+     "t": 15.02,
+     "text": "[ 15.0초] → X-Slow-14: a"
+    },
+    {
+     "t": 16.02,
+     "text": "[ 16.0초] ← 서버가 연결을 끊음 (헤더 15줄 보낸 뒤)"
+    }
+   ],
+   "evidence": "16.0초 뒤 끊김",
+   "ok": true,
+   "seconds": 16.02,
+   "run": "cleanup"
+  },
+  {
+   "section": "sigpipe",
+   "claim": "쓰는 도중 손님이 끊어도(SIGPIPE 무시) 그 연결만 닫고 서버는 유지",
+   "how": "50MB 파일을 받다가 1KB만 읽고 강제로 끊기(RST)를 30번 → 다른 요청",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "서버 PID 72, 열린 fd 57개"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /big.bin, 1,000바이트 받고 RST로 끊음  (1번째)"
+    },
+    {
+     "t": 0.0,
+     "text": "  … 같은 일을 30번"
+    },
+    {
+     "t": 0.02,
+     "text": "→ GET /big.bin, 1,000바이트 받고 RST로 끊음  (30번째)"
+    },
+    {
+     "t": 1.02,
+     "text": "서버 PID 72 살아 있음, 열린 fd 57개"
+    },
+    {
+     "t": 1.02,
+     "text": "→ GET /index.html   ← 200 <html><body>hello</body></html>"
+    }
+   ],
+   "evidence": "서버 유지, 다음 요청 200, fd 57 → 57개",
+   "ok": true,
+   "seconds": 1.02,
+   "run": "sigpipe"
+  },
+  {
+   "section": "shutdown",
+   "claim": "SIGINT을 받으면 새 연결은 거절하고, 처리 중이던 응답은 끝까지 보내고 종료",
+   "how": "3초 걸리는 프록시 요청을 보내 두고 SIGINT → 새로 접속 → 처리 중이던 응답 확인",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ webserver --root www --port 39423 --log-level info --config proxy.conf"
+    },
+    {
+     "t": 0.0,
+     "text": "  proxy.conf: route /py 127.0.0.1:50291"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초] → GET /py/slow?seconds=3  (백엔드가 3초 뒤 응답)"
+    },
+    {
+     "t": 0.51,
+     "text": "[  0.5초] $ kill -INT 93"
+    },
+    {
+     "t": 1.71,
+     "text": "[  1.7초] → 새 손님 접속 시도   ← 연결 거절 (ECONNREFUSED)"
+    },
+    {
+     "t": 3.0,
+     "text": "[  3.0초] ← 처리 중이던 요청: 200 late"
+    },
+    {
+     "t": 3.01,
+     "text": "[  3.0초]   서버 프로세스 끝남, 종료 코드 0"
+    },
+    {
+     "t": 3.01,
+     "text": "  서버 로그: [INFO] 종료 신호를 받음: 진행 중인 응답만 마저 보냄  (×18, 루프마다 한 줄)"
+    },
+    {
+     "t": 3.01,
+     "text": "  서버 로그: [INFO] 정상 종료"
+    }
+   ],
+   "evidence": "새 접속 거절, 처리 중이던 응답 200, 종료 코드 0",
+   "ok": true,
+   "seconds": 3.01,
+   "run": "shutdown"
+  },
+  {
+   "section": "concurrency",
+   "claim": "루프 수 = 컴퓨터 코어 수 (시작할 때 읽어서 결정)",
+   "how": "--loops 없이 띄운 서버의 시작 로그와 스레드 수",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ nproc"
+    },
+    {
+     "t": 0.0,
+     "text": "  18"
+    },
+    {
+     "t": 0.0,
+     "text": "$ webserver --root www --port 43211 --log-level info"
+    },
+    {
+     "t": 0.0,
+     "text": "  서버 로그: [INFO] 포트 43211에서 시작 (루트 /tmp/proof-www, 루프 18개)"
+    },
+    {
+     "t": 0.0,
+     "text": "$ ls /proc/114/task | wc -l"
+    },
+    {
+     "t": 0.0,
+     "text": "  19   (루프 18개 + 메인 1개)"
+    }
+   ],
+   "evidence": "코어 18개 → 루프 18개",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "concurrency"
+  },
+  {
+   "section": "concurrency",
+   "claim": "연결 수는 모든 루프가 같이 쓰는 값 하나 (원자 연산)",
+   "how": "루프 18개 서버를 최대 연결 4로 띄우고 4명 연결 → 5번째 손님 → 1명 나감",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ webserver --root www --port 46587 --log-level info --max-connections 4"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초] 손님 1 → GET /index.html   ← 200 (연결 유지)"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초] 손님 2 → GET /index.html   ← 200 (연결 유지)"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초] 손님 3 → GET /index.html   ← 200 (연결 유지)"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초] 손님 4 → GET /index.html   ← 200 (연결 유지)"
+    },
+    {
+     "t": 0.0,
+     "text": "[  0.0초] 손님 5 → GET /index.html"
+    },
+    {
+     "t": 1.51,
+     "text": "[  1.5초] 손님 5   1.5초 동안 응답 없음 (커널 대기줄에서 기다리는 중)"
+    },
+    {
+     "t": 1.51,
+     "text": "[  1.5초] 손님 4가 나감"
+    },
+    {
+     "t": 1.89,
+     "text": "[  1.9초] 손님 5   ← 200"
+    }
+   ],
+   "evidence": "5번째는 기다렸다가 자리가 나자 200",
+   "ok": true,
+   "seconds": 1.89,
+   "run": "concurrency"
+  },
+  {
+   "section": "proxy",
+   "claim": "경로 규칙별 Round-Robin (루프가 여럿이어도 차례 하나)",
+   "how": "백엔드 B1·B2·B3(자기 포트를 답함)을 /api에 두고 매번 새 연결로 6번 요청 (루프 18개)",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ webserver --root www --port 42599 --log-level info --config proxy.conf"
+    },
+    {
+     "t": 0.0,
+     "text": "  proxy.conf: route /api 127.0.0.1:59217 127.0.0.1:37115 127.0.0.1:43661"
+    },
+    {
+     "t": 0.0,
+     "text": "  proxy.conf: backend_fail_timeout 10"
+    },
+    {
+     "t": 0.0,
+     "text": "  B1=59217, B2=37115, B3=43661"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /api/hello   ← 200 backend 37115 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.01,
+     "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.01,
+     "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.01,
+     "text": "→ GET /api/hello   ← 200 backend 37115 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.01,
+     "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"
+    }
+   ],
+   "evidence": "B1 → B2 → B3 → B1 → B2 → B3",
+   "ok": true,
+   "seconds": 0.01,
+   "run": "proxy"
+  },
+  {
+   "section": "security",
+   "claim": "X-Forwarded-For 위조는 실제 주소로 덮어씀",
+   "how": "X-Forwarded-For: 6.6.6.6을 넣어 /api 요청 → 백엔드가 실제로 받은 값",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET /api/who HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Connection: close"
+    },
+    {
+     "t": 0.0,
+     "text": "→ X-Forwarded-For: 6.6.6.6"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 200 OK"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 43"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: close"
+    },
+    {
+     "t": 0.0,
+     "text": "← backend 59217 | X-Forwarded-For: 127.0.0.1"
+    }
+   ],
+   "evidence": "백엔드가 받은 값 127.0.0.1",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "proxy"
+  },
+  {
+   "section": "proxy",
+   "claim": "연결 실패한 백엔드는 10초 동안 뺌",
+   "how": "B2를 죽이고 6번 요청",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ kill B2 (포트 37115)"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.01,
+     "text": "→ GET /api/hello   ← 200 backend 43661 | X-Forwarded-For: 127.0.0.1"
+    },
+    {
+     "t": 0.01,
+     "text": "→ GET /api/hello   ← 200 backend 59217 | X-Forwarded-For: 127.0.0.1"
+    }
+   ],
+   "evidence": "상태 200 200 200 200 200 200, 응답한 백엔드 B3 B3 B1 B3 B3 B1",
+   "ok": true,
+   "seconds": 0.01,
+   "run": "proxy"
+  },
+  {
+   "section": "proxy",
+   "claim": "백엔드가 전부 죽으면 502, 정적 파일은 프록시를 거치지 않음",
+   "how": "백엔드 셋 다 죽이고 /api와 /index.html 요청",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ kill B1 B3"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /api/hello   ← 502 <html><head><title>502 Bad Gateway</titl …(총 93자)… 1></body></html>"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /index.html   ← 200 <html><body>hello</body></html>"
+    }
+   ],
+   "evidence": "/api → 502, /index.html → 200",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "proxy"
+  },
+  {
+   "section": "proxy",
+   "claim": "배압: 손님이 느리면 64KB에서 백엔드 읽기를 멈춤 (메모리 보호)",
+   "how": "백엔드가 300MB를 보내는데 손님은 64KB만 읽고 멈춤 → 서버 메모리 변화",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "서버 VmRSS 1,872 kB"
+    },
+    {
+     "t": 0.0,
+     "text": "→ GET /py/big?mb=300   (백엔드가 300MB를 보냄)"
+    },
+    {
+     "t": 0.0,
+     "text": "← 65,536바이트 받고 읽기를 멈춤"
+    },
+    {
+     "t": 1.0,
+     "text": "  1초 뒤 서버 VmRSS 2,160 kB"
+    },
+    {
+     "t": 2.0,
+     "text": "  2초 뒤 서버 VmRSS 2,160 kB"
+    },
+    {
+     "t": 3.0,
+     "text": "  3초 뒤 서버 VmRSS 2,160 kB"
+    },
+    {
+     "t": 4.0,
+     "text": "  4초 뒤 서버 VmRSS 2,160 kB"
+    }
+   ],
+   "evidence": "0.3 MB 늘어남 (쌓아 뒀다면 300MB)",
+   "ok": true,
+   "seconds": 4.0,
+   "run": "proxy"
+  },
+  {
+   "section": "security",
+   "claim": "../ 경로 이동은 404",
+   "how": "GET /../etc/passwd (curl처럼 정리하지 않고 그대로)",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET /../etc/passwd HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 404 Not Found"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 90"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: keep-alive"
+    }
+   ],
+   "evidence": "응답 404",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "security"
+  },
+  {
+   "section": "security",
+   "claim": "숨김 파일 .env는 404",
+   "how": "www/.env를 만들어 두고 GET /.env",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET /.env HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 404 Not Found"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 90"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: keep-alive"
+    }
+   ],
+   "evidence": "응답 404",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "security"
+  },
+  {
+   "section": "security",
+   "claim": "%2F 우회는 400",
+   "how": "GET /a%2Fb",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET /a%2Fb HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 400 Bad Request"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 94"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: close"
+    }
+   ],
+   "evidence": "응답 400",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "security"
+  },
+  {
+   "section": "security",
+   "claim": "%00 우회는 400",
+   "how": "GET /index.html%00.png",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET /index.html%00.png HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 400 Bad Request"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 94"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: close"
+    }
+   ],
+   "evidence": "응답 400",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "security"
+  },
+  {
+   "section": "security",
+   "claim": "심볼릭 링크는 403",
+   "how": "www/link → /etc/passwd를 만들어 두고 GET /link",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ GET /link HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 403 Forbidden"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 90"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: keep-alive"
+    }
+   ],
+   "evidence": "응답 403",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "security"
+  },
+  {
+   "section": "security",
+   "claim": "요청 스머글링: Transfer-Encoding + Content-Length 동시면 400",
+   "how": "두 헤더를 함께 보낸 POST",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "→ POST /index.html HTTP/1.1"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Host: demo"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Transfer-Encoding: chunked"
+    },
+    {
+     "t": 0.0,
+     "text": "→ Content-Length: 5"
+    },
+    {
+     "t": 0.0,
+     "text": "→ (본문 5바이트)"
+    },
+    {
+     "t": 0.0,
+     "text": "← HTTP/1.1 400 Bad Request"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Type: text/html; charset=utf-8"
+    },
+    {
+     "t": 0.0,
+     "text": "← Content-Length: 94"
+    },
+    {
+     "t": 0.0,
+     "text": "← Connection: close"
+    }
+   ],
+   "evidence": "응답 400",
+   "ok": true,
+   "seconds": 0.0,
+   "run": "security"
+  },
+  {
+   "section": "attack",
+   "claim": "slowhttptest Slowloris 1,000명: 약 15초에 정리, 서비스 유지",
+   "how": "slowhttptest -H: 1,000명이 헤더를 5초마다 조금씩 보냄. 최대 40초 (공격 연결이 다 끊기면 일찍 끝남)",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ slowhttptest -c 1000 -H -i 5 -r 200 -t GET -u http://서버/index.html -x 24 -p 3 -l 40"
+    },
+    {
+     "t": 20.47,
+     "text": "    0초  붙어 있음    0  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 20.47,
+     "text": "    5초  붙어 있음  928  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 20.47,
+     "text": "   10초  붙어 있음 1000  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 20.47,
+     "text": "   15초  붙어 있음 1000  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 20.47,
+     "text": "   20초  붙어 있음   73  서버가 끊음  927  정상 요청 응답함"
+    }
+   ],
+   "evidence": "최대 동시 1000명, 16초부터 끊기 시작해 927개 정리, 서비스가 안 된 초 0번",
+   "ok": true,
+   "seconds": 20.47,
+   "run": "attack"
+  },
+  {
+   "section": "attack",
+   "claim": "한계: Slow Read(응답을 아주 느리게 받는 손님)는 정리되지 않음",
+   "how": "slowhttptest -X: 500명이 50MB 파일 응답을 5초에 32바이트씩 읽음. 40초",
+   "log": [
+    {
+     "t": 0.0,
+     "text": "$ slowhttptest -c 500 -X -r 200 -w 512 -y 1024 -n 5 -z 32 -k 3 -u http://서버/big.bin -p 3 -l 40"
+    },
+    {
+     "t": 41.16,
+     "text": "    0초  붙어 있음    0  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "    5초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   10초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   15초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   20초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   25초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   30초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   35초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   40초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    },
+    {
+     "t": 41.16,
+     "text": "   41초  붙어 있음  500  서버가 끊음    0  정상 요청 응답함"
+    }
+   ],
+   "evidence": "40초 뒤에도 500명 남음, 서버가 끊은 연결 0개",
+   "ok": true,
+   "seconds": 41.16,
+   "run": "attack"
+  }
+ ]
+}

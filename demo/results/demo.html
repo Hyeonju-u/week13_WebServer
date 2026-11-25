@@ -1,0 +1,568 @@
+<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>멀티 루프 부하 비교</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 레이아웃: 한 줄 결론 → 재생 레인 → 단계별 막대 → 원자료 표 → 재현 방법, 한 칼럼 */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --fg: #1b2230;
+  --muted: #5d6677;
+  --line: #dde1e8;
+  --multi: #2457d6;
+  --multi-soft: #dbe5fb;
+  --single: #b0623a;
+  --single-soft: #f3e2d8;
+  --good: #1f7a4a;
+  --bad: #b3261e;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --surface: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
+    --multi: #6f97ff; --multi-soft: #23314f; --single: #e0956c; --single-soft: #3f2b21;
+    --good: #5cc28c; --bad: #ff8a80; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --surface: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
+  --multi: #6f97ff; --multi-soft: #23314f; --single: #e0956c; --single-soft: #3f2b21;
+  --good: #5cc28c; --bad: #ff8a80; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body);
+  font-size: 15px; line-height: 1.6;
+}
+.page {
+  max-width: 920px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+  display: grid; gap: 40px;
+}
+h1, h2 { text-wrap: balance; margin: 0; line-height: 1.25; }
+h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 700; }
+h2 { font-size: 19px; font-weight: 700; }
+p { margin: 0; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.label { font-size: 12px; letter-spacing: 0.06em; color: var(--muted); font-weight: 500; }
+header { display: grid; gap: 12px; }
+.lede { font-size: 17px; max-width: 62ch; }
+.lede strong { color: var(--multi); }
+.legend { display: flex; gap: 20px; flex-wrap: wrap; font-size: 14px; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.swatch.multi { background: var(--multi); }
+.swatch.single { background: var(--single); }
+section { display: grid; gap: 16px; }
+
+/* 재생 레인 */
+.stage {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px; display: grid; gap: 18px;
+}
+.controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.levels { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.levels button {
+  font: inherit; font-size: 14px; padding: 6px 14px; border: 0; background: transparent;
+  color: var(--fg); cursor: pointer;
+}
+.levels button + button { border-left: 1px solid var(--line); }
+.levels button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.play {
+  font: inherit; font-weight: 600; font-size: 14px; padding: 7px 18px; border-radius: 8px;
+  border: 0; background: var(--multi); color: #fff; cursor: pointer;
+}
+button:focus-visible { outline: 2px solid var(--multi); outline-offset: 2px; }
+.lane { display: grid; gap: 6px; }
+.lane-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.lane-name { font-weight: 600; }
+.lane-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 600; }
+.track { height: 26px; background: var(--bg); border-radius: 6px; overflow: hidden; }
+.fill { height: 100%; width: 0; border-radius: 6px; }
+.lane.multi .fill { background: var(--multi); }
+.lane.single .fill { background: var(--single); }
+.lane.multi .lane-count { color: var(--multi); }
+.lane.single .lane-count { color: var(--single); }
+.clock { font-family: var(--font-mono); font-size: 13px; color: var(--muted); }
+.verdict { font-size: 15px; }
+.verdict b { font-family: var(--font-mono); color: var(--multi); font-size: 20px; }
+
+/* 단계별 막대 */
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.chart h3 { margin: 0; font-size: 15px; }
+.group { display: grid; gap: 4px; }
+.bar-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; }
+.bar { height: 14px; border-radius: 4px; min-width: 2px; }
+.bar.multi { background: var(--multi); }
+.bar.single { background: var(--single); }
+.bar-value { font-family: var(--font-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; min-width: 8ch; text-align: right; }
+
+/* 표 */
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { padding: 10px 14px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0.04em; }
+th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+tbody tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--font-mono); }
+.tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; font-weight: 600; }
+.tag.multi { background: var(--multi-soft); color: var(--multi); }
+.tag.single { background: var(--single-soft); color: var(--single); }
+.ok { color: var(--good); }
+.err { color: var(--bad); }
+
+.conditions { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 24px; }
+.conditions div { display: grid; gap: 2px; }
+pre {
+  margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 16px; overflow-x: auto; font-family: var(--font-mono); font-size: 13px; line-height: 1.7;
+}
+.swatch.ideal { background: transparent; border: 2px dashed var(--muted); width: 14px; height: 0; border-radius: 0; }
+.svg-wrap { overflow-x: auto; }
+.svg-wrap svg { display: block; width: 100%; height: auto; }
+.svg-wrap text { fill: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.svg-wrap .grid { stroke: var(--line); stroke-width: 1; }
+.svg-wrap .ideal { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+.svg-wrap .real { stroke: var(--multi); stroke-width: 2.5; fill: none; }
+.svg-wrap .dot { fill: var(--multi); }
+.svg-wrap .value { fill: var(--fg); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .fill { transition: none !important; } }
+</style>
+
+<div class="page">
+  <header>
+    <span class="label">WEEK 13 웹 서버 · wrk 부하 테스트</span>
+    <h1>멀티 루프 부하 비교</h1>
+    <p class="lede" id="lede"></p>
+    <div class="legend">
+      <span><i class="swatch multi"></i>멀티 루프 (루프 9개)</span>
+      <span><i class="swatch single"></i>단일 루프 (루프 1개)</span>
+    </div>
+  </header>
+
+  <section aria-labelledby="race-title">
+    <h2 id="race-title">같은 시간 동안 처리한 요청 수</h2>
+    <div class="stage">
+      <div class="controls">
+        <div class="levels" role="group" aria-label="동시 연결 수" id="levels"></div>
+        <button class="play" id="play" type="button">재생</button>
+      </div>
+      <div class="lane multi">
+        <div class="lane-head"><span class="lane-name">멀티 루프</span><span class="lane-count" id="count-multi">0</span></div>
+        <div class="track"><div class="fill" id="fill-multi"></div></div>
+      </div>
+      <div class="lane single">
+        <div class="lane-head"><span class="lane-name">단일 루프</span><span class="lane-count" id="count-single">0</span></div>
+        <div class="track"><div class="fill" id="fill-single"></div></div>
+      </div>
+      <div class="controls">
+        <span class="clock" id="clock"></span>
+        <span class="verdict" id="verdict"></span>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="chart-title">
+    <h2 id="chart-title">동시 연결 수별 결과</h2>
+    <div class="charts">
+      <div class="chart"><h3>초당 요청 수 (높을수록 좋음)</h3><div id="chart-rps"></div></div>
+      <div class="chart"><h3>p99 응답 시간 (낮을수록 좋음)</h3><div id="chart-p99"></div></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="scale-title" id="scaling" hidden>
+    <h2 id="scale-title">루프 수를 늘리면</h2>
+    <p class="muted" id="scale-note"></p>
+    <div class="chart">
+      <h3>초당 요청 수: 실제 vs 루프 1개 성능 × 루프 수</h3>
+      <div class="svg-wrap" id="scale-chart"></div>
+      <div class="legend">
+        <span><i class="swatch multi"></i>실제 측정</span>
+        <span><i class="swatch ideal"></i>코어가 모두 루프 1개만큼 일했다면</span>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>루프 수</th><th>일한 코어(개분)</th><th>초당 요청</th><th>루프 1개 대비</th><th>일한 코어 하나당</th><th>p99</th><th>타임아웃</th></tr></thead>
+        <tbody id="scale-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="table-title">
+    <h2 id="table-title">원자료</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>서버</th><th>동시 연결</th><th>초당 요청</th><th>성공(200)</th><th>타임아웃(2초)</th><th>그 밖의 실패</th><th>p50</th><th>p99</th><th>최대</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="cond-title">
+    <h2 id="cond-title">측정 조건</h2>
+    <div class="conditions" id="conditions"></div>
+    <p class="muted">다시 돌리기 (Git Bash, Docker 필요)</p>
+    <pre>demo/load_test.sh          # 표와 그래프의 숫자
+demo/live.sh 1 1000 15     # 발표용 실시간 화면: 단일 루프 (코어 사용률 막대 + wrk 결과)
+demo/live.sh 9 1000 15     # 발표용 실시간 화면: 멀티 루프</pre>
+  </section>
+</div>
+
+<script>
+const DATA = {
+ "tool": "wrk",
+ "runs": [
+  {
+   "rps": 171700,
+   "ok": 3448706,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 0.39,
+   "p99_ms": 14.87,
+   "max_ms": 78.73,
+   "seconds": 20.1,
+   "loops": 9,
+   "connections": 100
+  },
+  {
+   "rps": 195651,
+   "ok": 3932990,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 3.83,
+   "p99_ms": 40.96,
+   "max_ms": 183.61,
+   "seconds": 20.1,
+   "loops": 9,
+   "connections": 1000
+  },
+  {
+   "rps": 140400,
+   "ok": 2820482,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 63.77,
+   "p99_ms": 148.93,
+   "max_ms": 384.71,
+   "seconds": 20.1,
+   "loops": 9,
+   "connections": 10000
+  },
+  {
+   "rps": 53570,
+   "ok": 1074021,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 1.57,
+   "p99_ms": 5.07,
+   "max_ms": 29.71,
+   "seconds": 20.1,
+   "loops": 1,
+   "connections": 100
+  },
+  {
+   "rps": 39635,
+   "ok": 796548,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 24.27,
+   "p99_ms": 46.99,
+   "max_ms": 212.75,
+   "seconds": 20.1,
+   "loops": 1,
+   "connections": 1000
+  },
+  {
+   "rps": 34849,
+   "ok": 699649,
+   "not_ok": 0,
+   "timeouts": 3942,
+   "socket_errors": 0,
+   "p50_ms": 264.59,
+   "p99_ms": 363.88,
+   "max_ms": 1990.0,
+   "seconds": 20.1,
+   "loops": 1,
+   "connections": 10000
+  }
+ ]
+};
+const SCALING = {
+ "tool": "wrk",
+ "connections": 1000,
+ "points": [
+  {
+   "rps": 41079,
+   "ok": 618472,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 23.76,
+   "p99_ms": 33.96,
+   "max_ms": 141.75,
+   "seconds": 15.1,
+   "loops": 1,
+   "busy_cores": 1.03,
+   "speedup": 1.0,
+   "ideal_rps": 41079,
+   "rps_per_busy_core": 39883
+  },
+  {
+   "rps": 83582,
+   "ok": 1262053,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 11.27,
+   "p99_ms": 22.01,
+   "max_ms": 94.38,
+   "seconds": 15.1,
+   "loops": 2,
+   "busy_cores": 1.97,
+   "speedup": 2.03,
+   "ideal_rps": 82158,
+   "rps_per_busy_core": 42427
+  },
+  {
+   "rps": 109792,
+   "ok": 1647952,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 8.82,
+   "p99_ms": 14.36,
+   "max_ms": 46.67,
+   "seconds": 15.0,
+   "loops": 3,
+   "busy_cores": 2.79,
+   "speedup": 2.67,
+   "ideal_rps": 123237,
+   "rps_per_busy_core": 39352
+  },
+  {
+   "rps": 139103,
+   "ok": 2098552,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 6.96,
+   "p99_ms": 11.87,
+   "max_ms": 45.47,
+   "seconds": 15.1,
+   "loops": 4,
+   "busy_cores": 3.69,
+   "speedup": 3.39,
+   "ideal_rps": 164316,
+   "rps_per_busy_core": 37697
+  },
+  {
+   "rps": 188480,
+   "ok": 2844042,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 5.03,
+   "p99_ms": 12.79,
+   "max_ms": 68.46,
+   "seconds": 15.1,
+   "loops": 6,
+   "busy_cores": 5.44,
+   "speedup": 4.59,
+   "ideal_rps": 246474,
+   "rps_per_busy_core": 34647
+  },
+  {
+   "rps": 246053,
+   "ok": 3706674,
+   "not_ok": 0,
+   "timeouts": 0,
+   "socket_errors": 0,
+   "p50_ms": 3.28,
+   "p99_ms": 16.68,
+   "max_ms": 57.62,
+   "seconds": 15.1,
+   "loops": 9,
+   "busy_cores": 7.86,
+   "speedup": 5.99,
+   "ideal_rps": 369711,
+   "rps_per_busy_core": 31304
+  }
+ ]
+};
+const runs = DATA.runs;
+const multiLoops = Math.max(...runs.map(r => r.loops));
+const levels = [...new Set(runs.map(r => r.connections))].sort((a, b) => a - b);
+const find = (loops, c) => runs.find(r => r.loops === loops && r.connections === c);
+const fmt = n => n.toLocaleString("ko-KR");
+const ms = n => (n < 10 ? n.toFixed(2) : n < 100 ? n.toFixed(1) : Math.round(n)) + " ms";
+const failures = r => r.not_ok + r.timeouts + r.socket_errors;
+let level = levels.includes(1000) ? 1000 : levels[0];
+
+function writeLede() {
+  const ratios = levels.map(c => find(multiLoops, c).rps / find(1, c).rps);
+  const low = Math.min(...ratios).toFixed(1), high = Math.max(...ratios).toFixed(1);
+  const allOk = runs.filter(r => r.loops === multiLoops).every(r => failures(r) === 0);
+  document.getElementById("lede").innerHTML =
+    `같은 9개 코어를 줬을 때 멀티 루프가 초당 <strong>${low}~${high}배</strong> 많은 요청을 처리했습니다. ` +
+    (allOk ? "멀티 루프는 모든 단계에서 실패 0건입니다." : "실패한 요청 수는 아래 표에 있습니다.") +
+    runs.filter(r => r.loops === 1 && r.timeouts > 0).map(r =>
+      ` 단일 루프는 동시 연결 ${fmt(r.connections)}에서 2초 안에 응답받지 못한 요청이 ${fmt(r.timeouts)}건 나왔습니다.`).join("");
+}
+
+function buildLevelButtons() {
+  const box = document.getElementById("levels");
+  levels.forEach(c => {
+    const button = document.createElement("button");
+    button.type = "button"; button.id = "level-" + c;
+    button.textContent = "연결 " + fmt(c);
+    button.addEventListener("click", () => { level = c; showFinal(); });
+    box.appendChild(button);
+  });
+}
+
+function setLane(name, count, ratio) {
+  document.getElementById("count-" + name).textContent = fmt(Math.round(count));
+  document.getElementById("fill-" + name).style.width = (ratio * 100).toFixed(2) + "%";
+}
+
+function showVerdict(multi, single) {
+  document.getElementById("verdict").innerHTML = `<b>${(multi.ok / single.ok).toFixed(1)}배</b> 더 처리`;
+}
+
+let frame = null;
+function showFinal() {
+  cancelAnimationFrame(frame);
+  document.querySelectorAll("#levels button").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.id === "level-" + level)));
+  const multi = find(multiLoops, level), single = find(1, level);
+  setLane("multi", multi.ok, 1);
+  setLane("single", single.ok, single.ok / multi.ok);
+  document.getElementById("clock").textContent = `${multi.seconds}초 측정 · 동시 연결 ${fmt(level)}개`;
+  showVerdict(multi, single);
+}
+
+/* 실제 측정 시간을 6초로 줄여 다시 보여 준다. 두 서버 모두 측정 내내 일정한 속도였다고 보고 그린다 */
+function play() {
+  cancelAnimationFrame(frame);
+  const multi = find(multiLoops, level), single = find(1, level);
+  const replayMs = 6000, start = performance.now();
+  document.getElementById("verdict").textContent = "";
+  const step = now => {
+    const progress = Math.min((now - start) / replayMs, 1);
+    setLane("multi", multi.ok * progress, progress);
+    setLane("single", single.ok * progress, (single.ok / multi.ok) * progress);
+    document.getElementById("clock").textContent =
+      `${(multi.seconds * progress).toFixed(1)}초 / ${multi.seconds}초 · 동시 연결 ${fmt(level)}개`;
+    if (progress < 1) { frame = requestAnimationFrame(step); } else { showVerdict(multi, single); }
+  };
+  frame = requestAnimationFrame(step);
+}
+
+function drawBars(targetId, key, format) {
+  const max = Math.max(...runs.map(r => r[key]));
+  const box = document.getElementById(targetId);
+  levels.forEach(c => {
+    const group = document.createElement("div");
+    group.className = "group";
+    group.innerHTML = `<span class="label">동시 연결 ${fmt(c)}</span>`;
+    [[multiLoops, "multi"], [1, "single"]].forEach(([loops, name]) => {
+      const r = find(loops, c);
+      const row = document.createElement("div");
+      row.className = "bar-row";
+      row.innerHTML = `<div><div class="bar ${name}" style="width:${(r[key] / max * 100).toFixed(1)}%"></div></div>` +
+        `<span class="bar-value">${format(r[key])}</span>`;
+      group.appendChild(row);
+    });
+    box.appendChild(group);
+  });
+}
+
+function fillTable() {
+  document.getElementById("rows").innerHTML = runs.map(r => {
+    const name = r.loops === 1 ? "single" : "multi";
+    const other = r.not_ok + r.socket_errors;
+    return `<tr><td><span class="tag ${name}">${r.loops === 1 ? "단일" : "멀티"} · 루프 ${r.loops}</span></td>` +
+      `<td class="num">${fmt(r.connections)}</td><td class="num">${fmt(r.rps)}</td>` +
+      `<td class="num">${fmt(r.ok)}</td>` +
+      `<td class="num ${r.timeouts ? "err" : "ok"}">${fmt(r.timeouts)}</td>` +
+      `<td class="num ${other ? "err" : "ok"}">${fmt(other)}</td>` +
+      `<td class="num">${ms(r.p50_ms)}</td><td class="num">${ms(r.p99_ms)}</td>` +
+      `<td class="num">${ms(r.max_ms)}</td></tr>`;
+  }).join("");
+}
+
+function fillConditions() {
+  const items = [
+    ["부하 도구", "wrk 4.2.0, 스레드 8개 (과제 문서가 든 부하 도구)"],
+    ["서버", `Docker Ubuntu 24.04, 코어 9개 (0~8번)`],
+    ["wrk 자리", "같은 컴퓨터, 다른 코어 9개 (9~17번)"],
+    ["요청", "GET /index.html, 본문 약 1.8KB, keep-alive"],
+    ["단계마다", `${Math.round(runs[0].seconds)}초, 연결 ${levels.map(fmt).join(" → ")}`],
+    ["실패", "2초 안에 응답 없음(wrk 기본값) + 소켓 오류 + 200 아닌 응답"],
+  ];
+  document.getElementById("conditions").innerHTML = items.map(([k, v]) =>
+    `<div><span class="label">${k}</span><span>${v}</span></div>`).join("");
+}
+
+function drawScaling() {
+  if (!SCALING || !SCALING.points.length) { return; }
+  const points = SCALING.points;
+  document.getElementById("scaling").hidden = false;
+  const first = points[0], last = points[points.length - 1];
+  document.getElementById("scale-note").textContent =
+    `서버에 같은 코어 9개를 주고 루프 수만 바꿨습니다. 동시 연결 ${fmt(SCALING.connections || 1000)}, 루프마다 ${Math.round(first.seconds)}초. ` +
+    `루프 ${last.loops}개는 루프 1개의 ${last.speedup}배였고, 일한 코어 하나당 처리량은 ${fmt(first.rps_per_busy_core)}에서 ${fmt(last.rps_per_busy_core)}로 줄었습니다. ` +
+    `위 비교와 따로 잰 측정이라 같은 조건(루프 ${last.loops}개, 연결 1,000)이어도 숫자가 다릅니다. 이 노트북은 측정할 때마다 20% 넘게 흔들립니다.`;
+  const width = 640, height = 300, left = 56, right = 44, top = 20, bottom = 40;
+  const maxLoops = last.loops;
+  const maxRps = Math.max(...points.map(p => Math.max(p.rps, p.ideal_rps)));
+  const step = maxRps > 300000 ? 100000 : 50000;
+  const yMax = Math.ceil(maxRps / step) * step;
+  const x = loops => left + (loops - 1) / (maxLoops - 1 || 1) * (width - left - right);
+  const y = rps => top + (1 - rps / yMax) * (height - top - bottom);
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="루프 수별 초당 요청 수">`;
+  for (let v = 0; v <= yMax; v += step) {
+    svg += `<line class="grid" x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}"/>` +
+      `<text x="${left - 8}" y="${y(v) + 4}" text-anchor="end">${v / 1000}k</text>`;
+  }
+  points.forEach(p => {
+    svg += `<text x="${x(p.loops)}" y="${height - bottom + 20}" text-anchor="middle">루프 ${p.loops}</text>`;
+  });
+  svg += `<polyline class="ideal" points="${points.map(p => `${x(p.loops)},${y(p.ideal_rps)}`).join(" ")}"/>`;
+  svg += `<polyline class="real" points="${points.map(p => `${x(p.loops)},${y(p.rps)}`).join(" ")}"/>`;
+  points.forEach(p => {
+    svg += `<circle class="dot" cx="${x(p.loops)}" cy="${y(p.rps)}" r="4"/>` +
+      `<text class="value" x="${x(p.loops)}" y="${y(p.rps) + 18}" text-anchor="middle">${p.speedup}×</text>`;
+  });
+  svg += "</svg>";
+  document.getElementById("scale-chart").innerHTML = svg;
+  document.getElementById("scale-rows").innerHTML = points.map(p =>
+    `<tr><td>루프 ${p.loops}</td><td class="num">${p.busy_cores.toFixed(1)}</td>` +
+    `<td class="num">${fmt(p.rps)}</td><td class="num">${p.speedup}배</td>` +
+    `<td class="num">${fmt(p.rps_per_busy_core)}</td><td class="num">${ms(p.p99_ms)}</td>` +
+    `<td class="num ${p.timeouts ? "err" : "ok"}">${fmt(p.timeouts)}</td></tr>`).join("");
+}
+
+writeLede();
+buildLevelButtons();
+drawScaling();
+drawBars("chart-rps", "rps", fmt);
+drawBars("chart-p99", "p99_ms", ms);
+fillTable();
+fillConditions();
+showFinal();
+document.getElementById("play").addEventListener("click", play);
+</script>

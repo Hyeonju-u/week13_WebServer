@@ -1,0 +1,275 @@
+<title>README 주장 증명</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 레이아웃: 요약 한 줄 → README 순서(①~④, 검증, 한계)대로 주장 목록, 공격 그래프는 해당 구역 안에 */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --fg: #1b2230;
+  --muted: #5d6677;
+  --line: #dde1e8;
+  --accent: #2457d6;
+  --accent-soft: #dbe5fb;
+  --warm: #b0623a;
+  --good: #1f7a4a;
+  --good-soft: #dcf1e5;
+  --bad: #b3261e;
+  --bad-soft: #f8dedc;
+  --limit: #8a6a12;
+  --limit-soft: #f4ead0;
+  --term-bg: #161b26;
+  --term-fg: #d7dce6;
+  --term-send: #8fb4ff;
+  --term-recv: #8fd9a8;
+  --term-cmd: #f3f5f9;
+  --term-dim: #8b93a3;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --surface: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
+    --accent: #6f97ff; --accent-soft: #23314f; --warm: #e0956c;
+    --good: #5cc28c; --good-soft: #1d3428; --bad: #ff8a80; --bad-soft: #3d2120;
+    --limit: #e0c062; --limit-soft: #3a321b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --surface: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
+  --accent: #6f97ff; --accent-soft: #23314f; --warm: #e0956c;
+  --good: #5cc28c; --good-soft: #1d3428; --bad: #ff8a80; --bad-soft: #3d2120;
+  --limit: #e0c062; --limit-soft: #3a321b; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.page {
+  max-width: 920px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+  display: grid; gap: 44px;
+}
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.25; }
+h1 { font-size: clamp(26px, 4vw, 36px); }
+h2 { font-size: 20px; }
+h3 { font-size: 15px; }
+p { margin: 0; }
+.label { font-size: 12px; letter-spacing: 0.06em; color: var(--muted); font-weight: 500; }
+.muted { color: var(--muted); }
+header { display: grid; gap: 14px; }
+.score { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.score b { font-family: var(--font-mono); font-size: 44px; line-height: 1; color: var(--good); font-variant-numeric: tabular-nums; }
+.score span { font-size: 17px; }
+.env { display: flex; gap: 8px 18px; flex-wrap: wrap; font-size: 13.5px; color: var(--muted); }
+section { display: grid; gap: 14px; }
+.section-head { display: grid; gap: 4px; }
+.thesis { color: var(--muted); }
+.claims { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.claim { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; padding: 14px 18px; border-top: 1px solid var(--line); }
+.claim:first-child { border-top: 0; }
+.chip { grid-row: span 4; align-self: start; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; white-space: nowrap; margin-top: 2px; }
+.chip.ok { background: var(--good-soft); color: var(--good); }
+.chip.no { background: var(--bad-soft); color: var(--bad); }
+.chip.limit { background: var(--limit-soft); color: var(--limit); }
+.claim-text { font-weight: 600; min-width: 0; }
+.claim-how { color: var(--muted); font-size: 14px; min-width: 0; }
+.claim-evidence { font-family: var(--font-mono); font-size: 13.5px; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.claim .term { grid-column: 2; margin-top: 6px; }
+.term {
+  background: var(--term-bg); color: var(--term-fg); border-radius: 8px; padding: 12px 14px;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0;
+}
+.term .out { color: var(--term-send); }
+.term .in { color: var(--term-recv); }
+.term .cmd { color: var(--term-cmd); font-weight: 600; }
+.term .note { color: var(--term-dim); }
+.claim-label { font-size: 11.5px; letter-spacing: 0.05em; color: var(--muted); }
+.claim-row { display: grid; gap: 2px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13.5px; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.svg-wrap svg { display: block; width: 100%; height: auto; }
+.svg-wrap text { fill: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.svg-wrap .grid { stroke: var(--line); stroke-width: 1; }
+.svg-wrap .connected { stroke: var(--accent); stroke-width: 2.5; fill: none; }
+.svg-wrap .closed { stroke: var(--warm); stroke-width: 2.5; fill: none; }
+.svg-wrap .marker { stroke: var(--fg); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.6; }
+.svg-wrap .marker-text { fill: var(--fg); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 520px; }
+th, td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 12px; font-weight: 500; color: var(--muted); }
+th:first-child, td:first-child { text-align: left; }
+tbody tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.err { color: var(--bad); }
+.ok-text { color: var(--good); }
+pre { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-family: var(--font-mono); font-size: 13px; line-height: 1.7; }
+</style>
+
+<div class="page">
+  <header>
+    <span class="label">WEEK 13 C 웹서버 + 리버스 프록시</span>
+    <h1>README 주장 증명</h1>
+    <div class="score"><b id="score"></b><span id="score-text"></span></div>
+    <p class="muted" style="max-width: 64ch">README에 적은 숫자와 동작을 하나씩 실제 서버에 재현했습니다. 주장마다 검은 칸에 실제로 보낸 요청(→), 서버가 실제로 보낸 응답(←), 시각, 서버 로그, 메모리 수치를 그대로 담았습니다. 손으로 고친 줄은 없습니다.</p>
+    <div class="env" id="env"></div>
+  </header>
+
+  <section id="s-memory">
+    <div class="section-head"><span class="label">①</span><h2>메모리 관리</h2><p class="thesis">메모리는 유한하다 → 한 명당 적게 쓰고, 끝난 연결은 바로 회수</p></div>
+    <div class="claims" id="c-memory"></div>
+  </section>
+
+  <section id="s-concurrency">
+    <div class="section-head"><span class="label">②</span><h2>동시성</h2><p class="thesis">많은 요청을 동시에 → 스레드가 잠들지 않는 구조로</p></div>
+    <div class="claims" id="c-concurrency"></div>
+    <div class="panel" id="load-panel" hidden>
+      <h3>wrk로 잰 처리량: 멀티 루프 9개 vs 단일 루프 (서버 코어 9개)</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>동시 연결</th><th>멀티 루프 초당 요청</th><th>단일 루프 초당 요청</th><th>배수</th><th>멀티 타임아웃</th><th>단일 타임아웃</th></tr></thead>
+        <tbody id="load-rows"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="s-proxy">
+    <div class="section-head"><span class="label">③</span><h2>리버스 프록시</h2><p class="thesis">백엔드 한 대의 과부하 → 앞에서 받아 여러 대로 분산</p></div>
+    <div class="claims" id="c-proxy"></div>
+  </section>
+
+  <section id="s-security">
+    <div class="section-head"><span class="label">④</span><h2>보안</h2><p class="thesis">사용자가 많으면 공격도 섞인다</p></div>
+    <div class="claims" id="c-security"></div>
+    <div class="panel" id="slowloris-panel" hidden>
+      <h3>slowhttptest Slowloris 1,000명: 연결 수 변화</h3>
+      <div class="svg-wrap" id="slowloris-chart"></div>
+      <div class="legend">
+        <span><i class="swatch" style="background: var(--accent)"></i>붙어 있는 공격 연결</span>
+        <span><i class="swatch" style="background: var(--warm)"></i>서버가 끊은 연결 (누적)</span>
+      </div>
+      <p class="muted">모든 초에서 정상 요청이 응답을 받았습니다 (slowhttptest의 서비스 확인).</p>
+    </div>
+  </section>
+
+  <section id="s-limit">
+    <div class="section-head"><span class="label">한계</span><h2>README에 적은 한계도 그대로인지</h2></div>
+    <div class="claims" id="c-limit"></div>
+    <div class="panel" id="slowread-panel" hidden>
+      <h3>slowhttptest Slow Read 500명: 연결 수 변화</h3>
+      <div class="svg-wrap" id="slowread-chart"></div>
+      <div class="legend">
+        <span><i class="swatch" style="background: var(--accent)"></i>붙어 있는 공격 연결</span>
+        <span><i class="swatch" style="background: var(--warm)"></i>서버가 끊은 연결 (누적)</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><span class="label">재현</span><h2>직접 돌려 보기</h2></div>
+    <pre>docker build -t webserver-demo demo     # 처음 한 번 (slowhttptest 포함 이미지)
+demo/proof.sh                           # 전부, 약 2분 반
+demo/proof.sh proxy security            # 구역 하나씩: memory limits cleanup sigpipe
+                                        #   shutdown concurrency proxy security attack
+demo/live.sh 1 1000 15                  # 단일 루프 실시간 부하 (코어 사용률 막대)
+demo/live.sh 9 1000 15                  # 멀티 루프 실시간 부하</pre>
+  </section>
+</div>
+
+<script>
+const DATA = __DATA__;
+const fmt = n => n.toLocaleString("ko-KR");
+const GROUP = r => {
+  if (r.claim.startsWith("한계")) { return "limit"; }
+  if (["memory", "limits", "cleanup", "sigpipe", "shutdown"].includes(r.section)) { return "memory"; }
+  if (r.section === "attack") { return "security"; }
+  return r.section;
+};
+const escape = text => String(text).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function fillHeader() {
+  const results = DATA.proof.results;
+  const passed = results.filter(r => r.ok).length;
+  document.getElementById("score").textContent = `${passed}/${results.length}`;
+  document.getElementById("score-text").textContent =
+    passed === results.length ? "주장 모두 README에 적힌 대로 재현됨" : `${results.length - passed}개는 README와 다르게 나옴`;
+  document.getElementById("env").innerHTML = [
+    "Docker Ubuntu 24.04", `코어 ${DATA.proof.cores}개 → 루프 ${DATA.proof.cores}개`, "멀티 루프 적용 버전 (main)",
+    "외부 도구: slowhttptest 1.9, wrk 4.2",
+  ].map(t => `<span>${t}</span>`).join("");
+}
+
+function fillClaims() {
+  DATA.proof.results.forEach(r => {
+    const group = GROUP(r);
+    const box = document.getElementById("c-" + group);
+    if (!box) { return; }
+    const chip = !r.ok ? '<span class="chip no">다름</span>'
+      : group === "limit" ? '<span class="chip limit">한계 확인</span>' : '<span class="chip ok">✔ 맞음</span>';
+    const row = document.createElement("div");
+    row.className = "claim";
+    const lines = (r.log || []).map(entry => typeof entry === "string" ? entry : entry.text).map(line => {
+      const text = escape(line);
+      const kind = /^(\[[ \d.]+초\] )?→/.test(line) || line.includes(" → ") && !line.includes("←") ? "out"
+        : line.includes("←") ? "in" : /^(\[[ \d.]+초\] )?\$/.test(line) ? "cmd" : "note";
+      return `<span class="${kind}">${text}</span>`;
+    }).join("\n");
+    row.innerHTML = chip + `<div class="claim-text">${escape(r.claim)}</div>` +
+      `<div class="claim-how">${escape(r.how)}</div>` +
+      `<div class="claim-evidence">결과: ${escape(r.evidence)}</div>` +
+      (lines ? `<pre class="term">${lines}</pre>` : "");
+    box.appendChild(row);
+  });
+}
+
+function fillLoad() {
+  const load = DATA.load;
+  if (!load) { return; }
+  const multi = Math.max(...load.runs.map(r => r.loops));
+  const levels = [...new Set(load.runs.map(r => r.connections))].sort((a, b) => a - b);
+  const find = (loops, c) => load.runs.find(r => r.loops === loops && r.connections === c);
+  document.getElementById("load-rows").innerHTML = levels.map(c => {
+    const m = find(multi, c), s = find(1, c);
+    return `<tr><td>${fmt(c)}</td><td class="num">${fmt(m.rps)}</td><td class="num">${fmt(s.rps)}</td>` +
+      `<td class="num">${(m.rps / s.rps).toFixed(1)}배</td>` +
+      `<td class="num ${m.timeouts ? "err" : "ok-text"}">${fmt(m.timeouts)}</td>` +
+      `<td class="num ${s.timeouts ? "err" : "ok-text"}">${fmt(s.timeouts)}</td></tr>`;
+  }).join("");
+  document.getElementById("load-panel").hidden = false;
+}
+
+function drawAttack(rows, targetId, panelId, markerSeconds) {
+  if (!rows.length) { return; }
+  document.getElementById(panelId).hidden = false;
+  const width = 640, height = 240, left = 48, right = 16, top = 16, bottom = 34;
+  const maxT = rows[rows.length - 1].t;
+  const maxY = Math.max(...rows.map(r => Math.max(r.connected, r.closed)));
+  const yTop = Math.ceil(maxY / 250) * 250 || 250;
+  const x = t => left + t / maxT * (width - left - right);
+  const y = v => top + (1 - v / yTop) * (height - top - bottom);
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="공격 연결 수 변화">`;
+  for (let v = 0; v <= yTop; v += yTop / 4) {
+    svg += `<line class="grid" x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}"/>` +
+      `<text x="${left - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  for (let t = 0; t <= maxT; t += 10) {
+    svg += `<text x="${x(t)}" y="${height - 12}" text-anchor="middle">${t}초</text>`;
+  }
+  if (markerSeconds) {
+    svg += `<line class="marker" x1="${x(markerSeconds)}" x2="${x(markerSeconds)}" y1="${top}" y2="${height - bottom}"/>` +
+      `<text class="marker-text" x="${x(markerSeconds) + 6}" y="${top + 12}">${markerSeconds}초</text>`;
+  }
+  svg += `<polyline class="connected" points="${rows.map(r => `${x(r.t)},${y(r.connected)}`).join(" ")}"/>`;
+  svg += `<polyline class="closed" points="${rows.map(r => `${x(r.t)},${y(r.closed)}`).join(" ")}"/>`;
+  svg += "</svg>";
+  document.getElementById(targetId).innerHTML = svg;
+}
+
+fillHeader();
+fillClaims();
+fillLoad();
+drawAttack(DATA.slowloris, "slowloris-chart", "slowloris-panel", 15);
+drawAttack(DATA.slowread, "slowread-chart", "slowread-panel", 0);
+</script>
