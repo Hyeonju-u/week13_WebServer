@@ -1,0 +1,115 @@
+[
+ {
+  "name": "TST-11",
+  "round": 1,
+  "connections": 1400,
+  "elapsed": 0.6,
+  "peak_fd": 1410,
+  "errors": 0
+ },
+ {
+  "name": "TST-11",
+  "round": 2,
+  "connections": 1400,
+  "elapsed": 0.6,
+  "peak_fd": 1410,
+  "errors": 0
+ },
+ {
+  "name": "TST-11-over-limit",
+  "requested": 1800,
+  "max_connections": 1500,
+  "peak_fd": 1510,
+  "wrk": {
+   "rps": 65620.65,
+   "p50": 22.88,
+   "p99": 23.62,
+   "socket_errors": 516,
+   "non_2xx": 0
+  }
+ },
+ {
+  "name": "TST-12",
+  "baseline": {
+   "rps": 67045.74,
+   "p50": 0.298,
+   "p99": 0.319,
+   "socket_errors": 0,
+   "non_2xx": 0
+  },
+  "loaded": {
+   "rps": 66580.28,
+   "p50": 0.299,
+   "p99": 0.32,
+   "socket_errors": 0,
+   "non_2xx": 0
+  },
+  "closed_at": [
+   15.0,
+   15.0
+  ]
+ },
+ {
+  "name": "TST-13",
+  "clients": 600,
+  "closed_after": [
+   5.0,
+   5.0
+  ]
+ },
+ {
+  "name": "TST-14",
+  "baseline": {
+   "rps": 66323.34,
+   "p50": 0.298,
+   "p99": 0.343,
+   "socket_errors": 0,
+   "non_2xx": 0
+  },
+  "loaded": {
+   "rps": 66594.18,
+   "p50": 0.299,
+   "p99": 0.335,
+   "socket_errors": 0,
+   "non_2xx": 0
+  },
+  "rss_peak_kb": 1712
+ },
+ {
+  "name": "TST-15/16",
+  "clients": 200,
+  "depth": 30
+ },
+ {
+  "name": "TST-17",
+  "clients": 900,
+  "memory_after_rounds_kb": [
+   14336,
+   18432
+  ]
+ },
+ {
+  "name": "TST-18",
+  "inputs": 600,
+  "unexpected": 0
+ },
+ {
+  "name": "TST-19",
+  "baseline": {
+   "rps": 66527.64,
+   "p50": 0.3,
+   "p99": 0.321,
+   "socket_errors": 0,
+   "non_2xx": 0
+  },
+  "loaded": {
+   "rps": 66268.21,
+   "p50": 0.301,
+   "p99": 0.326,
+   "socket_errors": 0,
+   "non_2xx": 0
+  },
+  "dead": 1200,
+  "slow": 100
+ }
+]
