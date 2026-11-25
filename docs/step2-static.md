@@ -76,7 +76,7 @@ request_t (path = "/docs/a%20b.html?x=1", method, keep_alive)
 - `Server` 헤더는 넣지 않는다
 - 200이 아닌 응답(301 포함)은 본문이 코드별 고정 짧은 HTML (`text/html; charset=utf-8`). 301 본문에도 주소를 넣지 않는다 (S19)
 - 오류 본문은 헤더 바로 뒤, 같은 버퍼에 이어 쓴다 (S27)
-- 다루는 코드와 사유 문구: 200 OK, 301 Moved Permanently, 400 Bad Request, 403 Forbidden, 404 Not Found, 405 Method Not Allowed, 408 Request Timeout (3단계 L34에서 추가), 411 Length Required, 413 Content Too Large, 414 URI Too Long, 431 Request Header Fields Too Large, 500 Internal Server Error, 501 Not Implemented, 505 HTTP Version Not Supported
+- 다루는 코드와 사유 문구: 200 OK, 301 Moved Permanently, 400 Bad Request, 403 Forbidden, 404 Not Found, 405 Method Not Allowed, 408 Request Timeout (3단계 L34에서 추가), 411 Length Required, 413 Content Too Large, 414 URI Too Long, 431 Request Header Fields Too Large, 500 Internal Server Error, 501 Not Implemented, 502 Bad Gateway, 504 Gateway Timeout (4단계 G38에서 추가), 505 HTTP Version Not Supported
 
 ## 6. 수명 규칙
 
@@ -114,6 +114,8 @@ size_t write_response_head (const response_head_t * head, time_t now,
                             char * buffer);
 
 /* include/static_file.h */
+#define MAX_PATH_TEXT_SIZE (MAX_HEADER_SIZE + 1)  /* 4단계 G32에서 헤더로 옮김 */
+
 typedef struct {
     response_head_t head;
     int fd;                      /* 200일 때만 열림. 그 밖 -1 */
@@ -122,6 +124,10 @@ typedef struct {
 char * copy_static_root (const char * path);   /* NULL = realpath 실패. free */
 void open_static_file (const request_t * request, const char * root,
                        static_result_t * result);
+/* 4단계 G32: 검사 순서 1~3번(? 자르기, % 풀기, . / .. 정리)만. 라우터(G3)와
+ * open_static_file이 같이 쓴다. 반환: 200 / 400 / 403 / 404 */
+int normalize_request_path (const char * path, size_t length,
+                            char * normalized);
 const char * find_mime_type (const char * path, size_t length);
 void close_static_file (static_result_t * result);  /* 두 번 불러도 안전 */
 ```
@@ -255,7 +261,7 @@ void close_static_file (static_result_t * result);  /* 두 번 불러도 안전 
 | S22 | 301 `Location`은 손님이 보낸 원문 경로(인코딩 그대로, 쿼리 뺌) + `/` | 다시 인코딩할 규칙이 필요 없음. 쿼리는 S1대로 버림 |
 | S23 | 5xx 응답에는 `Date`를 넣지 않는다 | RFC 9110 §6.6.1 (5xx는 MAY) |
 | S24 | 경로에 날것의 제어 바이트(0x00~0x1F, 0x7F)가 있으면 400. 검사 순서 2번에서 `%` 풀기와 같이 본다 | RFC 3986에 없는 글자 (S3과 같은 근거). 날것의 `\0`이 S4를 우회하는 것을 막음 |
-| S25 | 공개 함수: `copy_static_root`, `open_static_file`, `find_mime_type`, `close_static_file`, `write_response_head`. 결과는 `static_result_t` = `response_head_t` + `fd` (7번 인터페이스) | 경로 검사와 헤더 쓰기를 따로 테스트. 헤더 쓰기는 파서 오류·4단계에서도 씀 |
+| S25 | 공개 함수: `copy_static_root`, `open_static_file`, `find_mime_type`, `close_static_file`, `write_response_head`. (4단계 G32에서 `normalize_request_path` 추가) 결과는 `static_result_t` = `response_head_t` + `fd` (7번 인터페이스) | 경로 검사와 헤더 쓰기를 따로 테스트. 헤더 쓰기는 파서 오류·4단계에서도 씀 |
 | S26 | 정적 루트는 시작할 때 `copy_static_root`로 한 번 `realpath`하고 매 요청에 빌려 넘긴다. 루트 `/`도 받는다 | 요청마다 realpath 안 함. 경계 비교 기준이 실행 중 바뀌지 않음 |
 | S27 | 응답 헤더 버퍼는 고정 배열 `MAX_RESPONSE_HEAD_SIZE` = `MAX_HEADER_SIZE` + 여유. 여유는 301에서 경로를 뺀 나머지 290바이트(상태 줄 32, Content-Type 40, Content-Length 21, Connection 24, Date 37, `Location: /` 13, 빈 줄 2, 본문 121)보다 큰 가장 가까운 2의 거듭제곱 512. 넘침 처리 코드는 없음. 오류 본문은 헤더 바로 뒤에 이어 씀 | 경로는 입력에서 이미 8KB 안으로 막힘. 손님 글자가 들어가는 곳은 301 Location 한 줄뿐 (S19) |
 | S28 | `write_response_head`는 현재 시각을 `time_t now` 인자로 받는다 | 테스트에서 고정 시각(R-5)을 넣기 위해 |

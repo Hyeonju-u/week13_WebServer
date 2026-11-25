@@ -53,7 +53,8 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 
 ## 3. 정한 결정 (L, 2026-11-24)
 
-> 4단계 G15(설정 파일)로 L2·L18의 실행 인자는 설정 파일 항목으로 바뀜. G19로 L8의 최대 연결 수는 ÷ 2.
+> 4단계 G15(설정 파일)로 L2·L18의 실행 인자는 설정 파일 항목으로 바뀜. G19로 L8의 최대 연결 수는 ÷ 2 (L8은 처음부터 ÷ 2라 코드 변경 없음, G24).
+> 4단계 G25로 L28의 카드 free는 epoll_wait 묶음 끝으로 미뤄짐. G26으로 L24에 상태 5개 추가 (`docs/step4-proxy.md`).
 
 | # | 결정 | 근거 | 대가 / 남는 구멍 | R |
 |---|---|---|---|---|
@@ -80,11 +81,11 @@ accept → 카드 만들기 → [헤더 읽기] ─헤더 완성→ parse_reques
 | L21 | 본문이 붙은 정적 요청은 GET·POST 모두, 응답 코드와 관계없이 **응답을 먼저 보내고** 남은 본문은 그 뒤 본문 버리기 상태에서 버린다 (L11의 5초 / 30초). `Expect` 헤더가 있으면 메서드와 관계없이 버리지 않고 `Connection: close`. 그래서 3단계에는 본문 수신 상태와 본문 타임아웃이 없다 | 하나로 맞춤. 정적 응답은 본문을 쓰지 않으므로 기다릴 이유가 없음. `POST /../x`의 403(keep-alive, L10)처럼 405가 아닌 응답 뒤에도 본문이 남기 때문 | 본문 사이 타임아웃(L5)과 E-3, `--body-timeout-ms`는 4단계로 (프록시가 본문을 모을 때 처음 쓰임) | R2a, R3d, P10 |
 | L22 | listen backlog = `SOMAXCONN` (실제 길이는 커널 `net.core.somaxconn`). 시작할 때 소프트 한도와 실제 최대 연결 수(L8)를 stderr에 한 줄 찍는다 (L15 stderr의 예외). 소프트 한도를 스스로 올리지는 않음 | Q12(C10K): `wrk -c 10000`처럼 한꺼번에 접속하면 511은 넘쳐 SYN 재시도 지연(1초 이상)이 측정에 섞임. ulimit이 작은 환경을 바로 알기 위해 | — | R1a, R3b, Q12 |
 | L23 | accept가 `EMFILE`/`ENFILE`이면 우리 연결 수와 관계없이 listen을 빼고 **100ms 뒤** 다시 넣어 본다. 그 전에 연결이 닫혀 먼저 다시 넣으면 타이머는 취소. 다시 넣기(`epoll_ctl ADD`)가 실패하면 어느 경로든 100ms 뒤 재시도 | 연결이 0개면 L8의 "닫히면 다시 넣기"가 영영 안 옴. 연결이 다 idle이면 최대 75초 동안 바깥에서 풀린 fd를 못 씀. 여분 fd(`/dev/null`) 기법은 손님을 끊어서 L8 "거절 대신 대기"와 어긋남 | 100ms는 새 상수 (명세 근거 없음, 결과 보고에 적음) | R3b |
-| L24 | 진행 카드 상태는 `READ_HEAD` / `SEND` / `DISCARD` / `IDLE` / `LINGER` 5개. 전환표는 2번 | L21로 본문 수신 상태가 빠짐. 상태마다 epoll 관심과 타이머가 하나씩 정해짐 | 4단계에서 본문 수신·프록시 상태 추가 | R3c |
+| L24 | 진행 카드 상태는 `READ_HEAD` / `SEND` / `DISCARD` / `IDLE` / `LINGER` 5개 (4단계 G26에서 `CONTINUE` / `READ_BODY` / `CONNECT` / `BACKEND_SEND` / `BACKEND_READ` 추가). 전환표는 2번 | L21로 본문 수신 상태가 빠짐. 상태마다 epoll 관심과 타이머가 하나씩 정해짐 | 4단계에서 본문 수신·프록시 상태 추가 | R3c |
 | L25 | `add_body_bytes`에 남은 양보다 큰 count가 들어오면 디버그 빌드에서 `assert`로 멈춘다 (지금은 조용히 자름) | count는 소켓 코드가 남은 만큼만 읽은 양이라, 넘으면 소켓 코드 버그. ASan 통합 테스트 중 바로 잡힘 | 1단계 파일 변경. 릴리스 빌드(`NDEBUG`)에서는 지금처럼 자름 | R3c, P26 |
 | L26 | 받은 바이트가 0인 연결은 헤더 타임아웃이 지나면 408 없이 말없이 닫는다. 1바이트라도 받았으면 408 (L6) | 브라우저가 미리 열어 둔 연결. idle 중 408을 피한 L6과 같은 이유 (막 보낸 요청과 겹침). nginx도 같음 | 접근 로그 줄도 없음 (D 질문) | R4a |
 | L27 | (2026-11-24 고침) 손님 half-close(FIN)로 `Connection` 헤더를 바꾸지 않는다. `EPOLLRDHUP`을 받지 않고, 헤더는 요청 헤더와 L10·L11로만 정한다. half-close 손님은 응답을 끝까지 받고, 응답 뒤 `IDLE`에서 read 0으로 닫힌다 (L14) | 헤더를 정하는 순간 아직 도착하지 않은 FIN은 알 수 없어서 "half-close면 close로 답함"을 보장할 수 없음 (G-4가 FIN 도착 순서에 따라 가끔 실패). 보장할 수 없는 건 하지 않는다. nginx도 같음: `Connection` 줄은 `r->keepalive`로만 정하고 `pending_eof`는 keep-alive 대기에서 닫을 때만 봄 (`ngx_http_core_module.c`, `ngx_http_request.c`) | half-close 손님도 헤더에는 `keep-alive`가 찍힘 (손님은 더 보내지 않으니 피해 없음. 서버는 keep-alive를 언제든 닫을 수 있음) | R6a |
-| L28 | 카드는 연결마다 `malloc`(`create_conn`). 정리는 `destroy_conn(conn_t ** slot)` 하나: 타이머에서 빼기 → 파일 닫기 → `destroy_request` → 응답 헤더 free → 소켓 close → 카드 free → `*slot = NULL` → 정리 수 +1. 두 번째 호출은 `NULL`이라 바로 return | L19 "만든 수 = 정리한 수"가 그대로 드러남. 정리가 한 곳이라 빠뜨림이 없음 | 연결마다 malloc 1번 | R6a, L19 |
+| L28 | 카드는 연결마다 `malloc`(`create_conn`). 정리는 `destroy_conn(conn_t ** slot)` 하나: 타이머에서 빼기 → 파일 닫기 → `destroy_request` → 응답 헤더 free → 소켓 close → 카드 free → `*slot = NULL` → 정리 수 +1. 두 번째 호출은 `NULL`이라 바로 return. (4단계 G25·G26: 타이머 → 백엔드 놓기(`release_backend`) → 요청·응답 버퍼 → 소켓 close → `closed` 표시 + 해제 대기 목록 → `*slot = NULL` → 정리 수 +1. 카드 free는 묶음 처리가 끝난 뒤 `free_closed_conns`. 이미 `closed`여도 바로 return) | L19 "만든 수 = 정리한 수"가 그대로 드러남. 정리가 한 곳이라 빠뜨림이 없음 | 연결마다 malloc 1번 | R6a, L19 |
 | L29 | 타이머는 종류별 이중 연결 리스트(헤더·쓰기·idle·조용). 같은 종류는 값이 같아 뒤에 붙이면 마감 순서가 맞고, 갱신은 빼서 맨 뒤로 → O(1). `DISCARD`·`LINGER`의 전체 상한은 카드에 마감 시각만 두고 read 때마다 확인. `epoll_wait` 대기 = 각 리스트 맨 앞 중 가장 이른 마감까지 ms 올림, 없으면 -1. 시계는 `CLOCK_MONOTONIC` | 힙(O(log n))보다 짧고 빠름. 카드는 한 번에 리스트 하나에만 있음 (손님이 계속 보내면 read가 계속 와서 전체 상한을 확인할 수 있음) | 종류가 늘면 리스트도 늚 | R3c, L5 |
 | L30 | 한 번 깨어났을 때 연결 하나에서: 읽기 1번(최대 8KB), 쓰기 1번(헤더 남은 것 또는 조각 1개). listen에서는 accept 1개 | L3 "공평하게 돌리기". 빠른 손님 하나가 큰 파일로 루프를 붙잡지 않음(H-2). 새 상수 없음 | 1MB 파일이면 깨어나는 횟수 128번. 7단계에서 측정 | R3c, Q3 |
 | L31 | 손님 소켓에 `TCP_NODELAY`를 켠다 | 응답 헤더(작은 쓰기) 뒤 조각을 쓰면 Nagle + 손님 지연 ACK로 응답마다 약 40ms 멈춤 (루프백 MSS 64KB라 8KB 조각도 작은 조각) | 작은 패킷이 조금 늘 수 있음. 7단계에서 측정 | R3c |
