@@ -3,5 +3,6 @@
 
 int install_signal_handlers (void);
 int is_shutdown_requested (void);
+void request_shutdown (void);
 
 #endif

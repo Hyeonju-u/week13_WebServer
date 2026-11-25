@@ -6,6 +6,7 @@
 
 #define LOG_LINE_MAX 1024
 
+/* 루프 스레드를 만들기 전에만 바꾸고 이후에는 읽기만 한다 (M7) */
 static log_level_t current_level = LOG_INFO;
 
 static const char * find_level_name (log_level_t level);

@@ -7,14 +7,17 @@ FEATURE = -D_POSIX_C_SOURCE=200809L
 endif
 CFLAGS ?= -O2
 CFLAGS += -std=c11 $(FEATURE) -Wall -Wextra -Wpedantic -Werror -Isrc
+# 루프마다 스레드 하나 (M1)
+CFLAGS += -pthread
 
 SERVER_SOURCES = $(filter-out src/main.c,$(wildcard src/*.c))
 SERVER_OBJECTS = $(patsubst src/%.c,build/%.o,$(SERVER_SOURCES))
 ASAN_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
 UBSAN_FLAGS = -fsanitize=undefined -fno-sanitize-recover=undefined -g -O1
+TSAN_FLAGS = -fsanitize=thread -fno-omit-frame-pointer -g -O1
 UNIT_TESTS = $(patsubst tests/%.c,build/%,$(wildcard tests/test_*.c))
 
-.PHONY: all asan asan-test ubsan limit-build test unit-test functional-test backend-health-test stress-test bench clean
+.PHONY: all asan asan-test tsan tsan-test ubsan limit-build test unit-test functional-test backend-health-test multiloop-test stress-test bench clean
 
 all: build/webserver
 
@@ -51,11 +54,29 @@ asan-test: asan limit-build
 	ASAN_OPTIONS=log_path=$(CURDIR)/$(ASAN_REPORTS)/asan:detect_leaks=1:quarantine_size_mb=$(ASAN_QUARANTINE_MB) \
 	UBSAN_OPTIONS=log_path=$(CURDIR)/$(ASAN_REPORTS)/ubsan:print_stacktrace=1 \
 	WEBSERVER_BINARY=$(CURDIR)/build-asan/webserver \
-	sh -c 'python3 tests/functional_test.py && python3 tests/backend_health_test.py'
+	sh -c 'python3 tests/functional_test.py && python3 tests/backend_health_test.py && python3 tests/multiloop_test.py'
 	@if [ -n "$$(ls $(ASAN_REPORTS))" ]; then \
 	    echo "sanitizer 보고 있음:"; cat $(ASAN_REPORTS)/*; exit 1; \
 	fi
 	@echo "sanitizer 보고 0건 (누수 포함)"
+
+# 루프 스레드 사이의 데이터 경쟁을 찾는 빌드 (M8). TSan은 ASan과 같이 켤 수 없다
+tsan:
+	mkdir -p build-tsan
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) -o build-tsan/webserver src/*.c
+
+# asan-test와 같은 모양: TSan 보고를 파일로 받아 하나라도 있으면 실패 (M8)
+TSAN_REPORTS = build-tsan/reports
+tsan-test: tsan limit-build
+	rm -rf $(TSAN_REPORTS)
+	mkdir -p $(TSAN_REPORTS)
+	TSAN_OPTIONS=log_path=$(CURDIR)/$(TSAN_REPORTS)/tsan \
+	WEBSERVER_BINARY=$(CURDIR)/build-tsan/webserver \
+	sh -c 'python3 tests/functional_test.py && python3 tests/backend_health_test.py && python3 tests/multiloop_test.py'
+	@if [ -n "$$(ls $(TSAN_REPORTS))" ]; then \
+	    echo "TSan 보고 있음:"; cat $(TSAN_REPORTS)/*; exit 1; \
+	fi
+	@echo "TSan 보고 0건"
 
 # ASan이 동작하지 않는 환경(이 개발 컴퓨터)에서 쓰는 대체 빌드
 ubsan:
@@ -70,7 +91,7 @@ unit-test: $(UNIT_TESTS)
 
 # 모든 테스트를 명령 하나로 다시 실행한다 (TST-07). 가혹 조건은 규모를 줄인 빠른 판이다.
 # 정식 규모는 make stress-test, 30분 장시간은 make long-test
-test: all unit-test functional-test backend-health-test
+test: all unit-test functional-test backend-health-test multiloop-test
 	python3 tests/stress_test.py --quick
 
 functional-test: all limit-build
@@ -78,6 +99,9 @@ functional-test: all limit-build
 
 backend-health-test: all
 	python3 tests/backend_health_test.py
+
+multiloop-test: all
+	python3 tests/multiloop_test.py
 
 stress-test: all
 	python3 tests/stress_test.py
@@ -89,4 +113,4 @@ bench: all
 	tests/bench.sh
 
 clean:
-	rm -rf build build-asan build-ubsan build-limit
+	rm -rf build build-asan build-tsan build-ubsan build-limit

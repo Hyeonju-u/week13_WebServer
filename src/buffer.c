@@ -1,6 +1,7 @@
 #include "buffer.h"
 
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,11 +9,14 @@
 
 #include "settings.h"
 
-/* 모든 버퍼의 합계를 한 곳에서 세어야 서버 전체 상한(NET-12)을 지킬 수 있다 */
-static size_t total_bytes = 0;
+/* 모든 버퍼의 합계를 한 곳에서 세어야 서버 전체 상한(NET-12)을 지킬 수 있다.
+ * 루프 스레드가 같이 세므로 원자 변수다 (M3). 상한은 스레드를 만들기 전에만
+ * 바꾸고 이후에는 읽기만 한다 (M7) */
+static atomic_size_t total_bytes = 0;
 static size_t total_limit = BUFFER_TOTAL_MAX;
 
 static size_t compute_capacity (size_t current, size_t needed);
+static int take_buffer_bytes (size_t growth);
 
 /* ── 공개 함수 ── */
 
@@ -33,14 +37,14 @@ int reserve_buffer (byte_buffer_t * buffer, size_t extra_length) {
     }
     size_t capacity = compute_capacity(buffer->capacity, needed);
     size_t growth = capacity - buffer->capacity;
-    if (growth > total_limit - total_bytes) {
+    if (take_buffer_bytes(growth) != 0) {
         return -1;
     }
     char * grown = realloc(buffer->data, capacity);
     if (grown == NULL) {
+        atomic_fetch_sub(&total_bytes, growth);
         return -1;
     }
-    total_bytes += growth;
     buffer->data = grown;
     buffer->capacity = capacity;
     return 0;
@@ -94,7 +98,7 @@ void consume_bytes (byte_buffer_t * buffer, size_t length) {
 }
 
 void release_buffer (byte_buffer_t * buffer) {
-    total_bytes -= buffer->capacity;
+    atomic_fetch_sub(&total_bytes, buffer->capacity);
     free(buffer->data);
     init_buffer(buffer);
 }
@@ -104,7 +108,7 @@ void set_buffer_limit (size_t limit) {
 }
 
 size_t get_total_buffer_bytes (void) {
-    return total_bytes;
+    return atomic_load(&total_bytes);
 }
 
 /* ── 도우미 함수 ── */
@@ -126,4 +130,17 @@ static size_t compute_capacity (size_t current, size_t needed) {
         capacity *= 2;
     }
     return capacity;
+}
+
+/*
+ * 다른 루프와 동시에 늘려도 합계가 상한을 넘지 않도록 먼저 더해 자리를
+ * 잡고, 넘었으면 되돌린다 (M3, NET-12). 0이면 잡았고 -1이면 상한 초과
+ */
+static int take_buffer_bytes (size_t growth) {
+    size_t before = atomic_fetch_add(&total_bytes, growth);
+    if (growth > total_limit || before > total_limit - growth) {
+        atomic_fetch_sub(&total_bytes, growth);
+        return -1;
+    }
+    return 0;
 }

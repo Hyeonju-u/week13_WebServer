@@ -10,7 +10,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (ROOT, Checker, PythonBackend, Server, connect, exchange, find_free_port,
+from harness import (ROOT, Checker, PythonBackend, Server, connect, count_extra_loop_fds, exchange, find_free_port,
                      fingerprint, get, parse_head, read_head, read_response)
 
 checker = Checker()
@@ -330,7 +330,7 @@ def test_restart_and_idle_cpu(root):
 
 def test_fd_exhaustion(root):
     print("[fd 고갈 (비상용 fd)]")
-    server = Server(root, fd_limit=48, hard_limit=True, max_connections=1000)
+    server = Server(root, fd_limit=48 + count_extra_loop_fds(), hard_limit=True, max_connections=1000)
     sockets = []
     for _ in range(150):
         try:
@@ -424,7 +424,7 @@ def test_proxy_backpressure(proxy_port, proxy):
           during - before < 3000)
     sock.close()
     time.sleep(1)
-    check("손님이 끊으면 프록시 연결도 정리 (fd %d)" % proxy.fd_count(), proxy.fd_count() <= 12)
+    check("손님이 끊으면 프록시 연결도 정리 (fd %d)" % proxy.fd_count(), proxy.fd_count() <= 12 + count_extra_loop_fds())
 
 
 def test_connect_timeout(base, root):
@@ -527,7 +527,7 @@ def main():
         for server in [static_server, proxy] + backends:
             before = server.fd_count()
             check("서버 %d 종료 전 fd 수가 시작 수준(listen+루트+비상용 등)" % server.port,
-                  before <= 12, "fd=%d" % before)
+                  before <= 12 + count_extra_loop_fds(), "fd=%d" % before)
         for server in [static_server, proxy] + backends:
             code = server.stop()
             check("서버 %d SIGINT로 정상 종료(코드 0)" % server.port, code == 0, "code=%s" % code)
